@@ -1,0 +1,461 @@
+---
+title: "Starting with NIMBLE"
+author: "Javier Fernández López"
+date: "20/4/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Animal abundance simulation
+
+ Here I'll explain some simple simulations that I'm using to understand how NIMBLE works. I've been using the same example for a while to understand some other packages/approaches such as [unmarked](https://jabiologo.github.io/web/tutorials/nmixture.html) 
+ or [hSDM/INLA](https://jabiologo.github.io/web/tutorials/example_INLA.html).  Please, if you think the simulations are kind of wrong or they can be improved, don't hesitate to let me know!<br/><br/>
+General context: I'm simulating the abundance distribution of a species following an Inhomogeneous Poisson Point Process (IPPP). The $\lambda$ parameter of the IPPP is driven for two covariates: distance to a water point  and tree cover (this is a toy example and I chose these two "names" just for  convenience). Anyway, we have that the number of animals in a cell _i_ follows:
+
+\begin{equation}
+\tag{Eq 1}\label{eq1}
+N_{i} \sim Poisson(\lambda_{i})
+\end{equation}
+
+and $\lambda$ parameter follows:
+
+\begin{equation}
+\tag{Eq 2}\label{eq2}
+log(\lambda_{i}) = \beta_{0} + \beta_{1} * dwat_{i} + \beta_{2} * tree_{i}
+\end{equation}
+
+So we just choose some values for coefficients and run the simulation:
+
+*   $\beta_{0} = 2$
+*   $\beta_{1} = -0.5$
+*   $\beta_{2} = 0.3$
+
+<br/><br/>
+```{r ch1, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center"}
+set.seed(3)
+library(dismo)
+library(terra)
+library(sf)
+library(dplyr)
+
+# Create a study area
+sarea <- raster(nrows = 50, ncols = 50, xmn = 0, xmx = 50, ymn = 0, ymx = 50)
+# Distance to water point covariate
+dwat <- scale(distanceFromPoints(sarea, c(15,15)))
+# Tree cover covariate
+tree <- raster(nrows = 5, ncols = 5, xmn = 0, xmx = 50, ymn = 0, ymx = 50)
+tree[] <- runif(25, 1,10)
+tree <- scale(disaggregate(tree,10, "bilinear"))
+
+# Lambda parameter for the Poisson distribution of the abundance will be 
+# function from "distance to water point" and "tree cover" with the following
+# coefficients
+beta0 <- 2
+beta1 <- -0.5
+beta2 <- 0.3
+lambda <- exp(beta0 + beta1*(dwat) + beta2*(tree))
+
+# Now we can fill each cell of our study area with a random number from a 
+# Poisson distribution with a different lambda at each site/cell (IPPP)
+for (i in 1:ncell(sarea)){
+  sarea[i] <- rpois(1, lambda[i])
+}
+
+# Plot the different variables and the study area
+par(mfrow = c(2,2))
+plot(dwat, main = "Distance to the water point")
+plot(tree, main = "Tree cover")
+plot(lambda, main = "Lambda parameter of the IPPP")
+plot(sarea, main = "Animal abundance per cell")
+```
+<br/><br/>
+
+## Simple Poisson model with NIMBLE
+
+Now we'll simulate a sampling procedure in 50 sites with perfect detectability (all animals of a sampled unit are detected) to fix a simple Poisson model using NIMBLE.
+
+```{r ch2, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center"}
+library(nimble)
+# These will be the sampled cells
+siteID <- sample(1:ncell(sarea), 50)
+
+# We build a simple data frame with the number of animals detected per site
+df <- data.frame(siteID)
+df$animals <- extract(sarea,siteID)
+```
+
+Now we can build "data" and "constants" objects for NIMBLE model.
+
+```{r ch4, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center"}
+constants <- list(ncell = ncell(sarea),
+                  cell = siteID,
+                  nsamp = length(siteID))
+
+data <- list(y = df$animals,
+             dwat = dwat[],
+             tree = tree[])
+
+```
+
+Then, we can describe our model. We have a whole study area with 50x50 cells (2500) and only 50 samples. We are interested in predictios for the whole study area. We'll describe two likelihoods: one for the latent state in the whole study area that will follow a Poisson distribution with $\lambda$ depending on the two covariates. Then, we'll describe another likelihood to simulate the sampling procedure. *See comments in the script*
+DISCLAIMER: I started with this simulations before your workshop at GdR, so I was mainly following [scrips](https://github.com/n-a-gilbert/isdm_examples) from Gilbert et al. (2021) [Integrating harvest and camera trap data in species distribution models](https://www.sciencedirect.com/science/article/abs/pii/S0006320721001993). So probably the way in which I specify the models or some other things related to NIMBLE usage doesn't match with your "way to do". These are things I'd like to learn during the next years, to better understand the NIMBLE "stuff". Anyway, the model:
+
+```{r ch5, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center"}
+simuPoiss <- nimble::nimbleCode( {
+  # PRIORS (I use kind of informative priors since I already know the "real" 
+  # coeficients, but I imagine I'd use uniform in real life...)
+  # Intercept
+  b_intercept ~ dnorm(0, 2)
+  # Regression coefficient for distance to water
+  b_dwat ~ dnorm(0, 2)
+  # Regression coefficient for tree covariate
+  b_tree ~ dnorm(0, 2)
+  
+  # LIKELIHOOD
+  # Simple Poisson model for "latent state". N ~ Poiss(lambda) being 
+  # log(lambda) = b0 + b1X1 + b2X2. The loop will iterate thought our sampled
+  # data
+  for(i in 1:ncell){
+    log(lambda[i]) <- b_intercept + b_dwat*dwat[i] + b_tree*tree[i]
+    n[i] ~ dpois(lambda[i])
+  }
+  
+  # Sampling model. This is something I really don't know if I'm doing well.
+  # I tried to model directly sampling and latent state at the same time, since 
+  # we have "perfect detectability"... but something was wrong. So I'm using
+  # this likelihood in which the sampled number of animals only depends in 
+  # lambda value of the cell... which is modeled in the latent state likelihood.
+  # Is this right?
+  for(j in 1:nsamp){
+    y[j] ~ dpois(n[cell[j]])
+    }
+} )
+
+# Once the model is defined, we should provide a function to get some random
+# initial values for each of our parameters (sampled from an uniform 
+# distribution, for example)
+
+inits <- function() {
+  base::list(n = rep(1, constants$ncell),
+             b_intercept = runif(1, -1, 1),
+             b_dwat = runif(1, -1, 1),
+             b_tree = runif(1, -1, 1)
+  )
+  }
+
+```
+
+Now that our model is specified, we can define the MCMC settings:
+
+```{r ch6, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center"}
+# Set values we are interested in
+keepers <- c("lambda", 'b_intercept', "b_dwat", "b_tree")
+
+# Finally we define the settings of our MCMC algorithm
+nc <- 2 # number of chains
+nb <- 1000 # number of initial MCMC iterations to discard
+ni <- nb + 20000 # total number  of iterations
+```
+
+Now comes the tricky part for me, mainly because I'm not familiar with NIMBLE. I saw in the GdR workshol you did this part in a different way, but I still have to "study" this part. I understand (imagine) that in this chunk of code you are preparing and compiling the code to be run in C++. But I really don't know exactly what are you doing at each step. When running more complex models I get long waiting times in this part, and I really don't know how to increase the speed of this step :S. Definetively this is something I'd like to learn. My laptop specifications are: Linux machine, IntelCore i7 10th generation with 64G RAM. 
+
+```{r ch7, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center", cache = TRUE,}
+# Now he create the model
+model <- nimble::nimbleModel(code = simuPoiss, 
+                             data = data, 
+                             constants = constants, 
+                             inits = inits())
+
+# Check if everything is initialized (I understand this)
+model$initializeInfo()
+
+# Compile the model (I'm lost here. In general I understand, but I'm not able
+# to modify any configuration rigth now)
+c_model <- nimble::compileNimble(model)
+model_conf <- nimble::configureMCMC(model)
+model_conf$addMonitors(keepers)
+model_mcmc <- nimble::buildMCMC(model_conf)
+c_model_mcmc <- nimble::compileNimble(model_mcmc, project = model)
+```
+
+One of my questions here is how to improve the performance in computing time here. I understand (more or less) how can be improved MCMC algorithm (or at least I understand what the algorithm is doing during MCMC simulations, so I'm OK if it is taking long time). But when I'm trying more complex models (a larger study area ~ 50,000 cells; higher number of covariates ~ 13 and more complex models such as including iCAR for spatial autocorrelation), I'm getting super long waiting times here. I don't know if there is any way to optimize the likelihood, model, MCMC algorithm, keepers, to accelerate this part. Anyway, this is something to learn during the next years :).
+
+```{r ch8, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center", cache = TRUE}
+# Run the MCMC
+samples <- nimble::runMCMC(c_model_mcmc, 
+                           nburnin = nb, 
+                           niter = ni, 
+                           nchains = nc)
+
+```
+
+I have some issues also here. I understand MCMC algorithm outputs (iterations, chains, etc), and I'm kind of familiar with coda package for MCMC trace inspection. But once again, when running more complex models I'm getting long waiting times in summarizing MCMC outputs.
+
+```{r ch9, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center", cache = TRUE}
+# We can use now the coda package to see MCMC results
+samples_mcmc <- coda::as.mcmc.list(lapply(samples, coda::mcmc))
+
+# Look at traceplots (3 chains) of the three parameters
+par(mfrow=c(1,3))
+coda::traceplot(samples_mcmc[, 1:3])
+# Calculate Rhat convergence diagnostic for the three parameters
+coda::gelman.diag(samples_mcmc[,1:3])
+```
+Traceplots are not the best, but I think it's enough for this toy example... Now we can extract estimates values (mean) from the posterior distributions to compare them with simulated values.
+
+
+```{r ch10, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center"}
+# extract mean for each parameter
+samplesdf <- as.data.frame(rbind(samples_mcmc$chain1,samples_mcmc$chain2))
+mValues <- colMeans(samplesdf)
+# We can inspect the mean of posterior distributions for each parameter
+# Remember that real values were: int=2; dwat=-0.5; tree=0.3
+mValues[1:3]
+
+# Now we can plot lambda predictions and SD for each cell
+pred <- sarea
+pred[] <- mValues[4:length(mValues)]
+
+par(mfrow = c(1,3))
+plot(sarea, main = "Animal abundance per cell")
+plot(pred, main = "Predicted abundance per cell")
+plot(pred[], sarea[], pch = 16, cex = .8)
+abline(a=1, b=1, col = "darkred", lwd = 2)
+
+```
+<br/><br/>
+
+## More complex examples
+
+One of the things I'm starting to work with related to my project is the "Change of Support problem", or dealing with spatial misalignment in abundance models. When using hunting yields it is a common situation (among other problems) to deal with polygons (hunting grounds, municipalities, provinces, etc) with our response variable "hunted animals". However, we are often interested in predictions at fine resolution level (cell), as an abundance index. This topic has been addressed many times, like in Gilbert et al. 2021, but also during the GdR conference by Baptiste Alglave in "Inférer la distribution des espèces à l'aide de données de captures spatialement agrégées" and also something related in Bastien Mourguiart "Determining abundance-environment relationships of manila clam using misaligned environmental data". I'm very intereseted in this topic since I think is the first step in combining hunting yield data with other source of information, as in Gilbert et al. 2021. Here I'll address a very, very simple case using the previous example, but there are several things that I'd like to discuss/ask to you (we can talk about these things during our meeting). The general context is to address a "change of support" from coarser resolution data (namely animal counts at municipality level, for example), to fine resolution cells. To do this, we will aggregate our response variable counted animals in irregular polygons (simulating municipality boundaries). Then we will fix a NIMBLE model by defining two likelihoods, latent state at cell level and "sampling" process at polygon level, specifing what cells are inside each polygon.
+
+```{r ch11, message=FALSE, fig.height = 6.25, fig.width = 6, fig.align = "center"}
+# Firstly, we create some municipalityes using random points  and Voronoi 
+# polygons
+l1 <- randomPoints(sarea, 50)
+muni <- crop(voronoi(l1, ext = extent(sarea)),sarea)
+
+# Here we transform our raster in polygons to work with dataframes
+spoly <- rasterToPolygons(sarea)
+names(spoly) <- "animals"
+spoly$cellId <- 1:nrow(spoly)
+
+# This ugly chunk is to assign each cell to a polygon
+spoints <- rasterToPoints(sarea)
+ex <- terra::extract(muni,spoints[,1:2])
+ex <- ex[!duplicated(ex$point.ID),]
+spoly$muni <- ex$poly.ID
+
+# Finally, another ugly code to name cell IDs in order inside each polygon
+# To invoque Change of Support we need cells having an ascendent order inside
+# each polygon, so cell IDs in polygon 1 will be from 1 to 9, cells in polygon
+# 2 will be from 10 to 15, in polygon 3 will be from 16 to 22, etc.
+# (Note that numbers are invented)
+spoly_<-st_as_sf(spoly) %>% arrange(muni) %>% mutate(cellIdNew=1:nrow(spoly))
+#plot(st_as_sf(spoly_)["cellId"])
+#plot(st_as_sf(spoly_)["cellIdNew"])
+spoly_$dwat <- dwat[spoly_$cellId]
+spoly_$tree <- tree[spoly_$cellId]
+# Here we count number of animals and we take the mean of predictor covariates
+# for each municipality
+muni_ <- spoly_ %>% group_by(muni) %>% dplyr::summarise(animals=sum(animals),
+                                                    minId=min(cellIdNew), 
+                                                    maxId=max(cellIdNew),
+                                                    dwat=mean(dwat),
+                                                    tree=mean(tree))
+plot(sarea); lines(muni)
+plot(muni_["animals"])
+```
+
+Now we have all the elements that we would have in "real life": a number of counted animals at polygon level (coarse resolution) and environmental variables at cell level (fine resolution). Now, we can specify a new dataset:
+
+```{r ch12, message=FALSE, fig.height = 6.25, fig.width = 6, fig.align = "center"}
+
+constants <- list(ncell = nrow(spoly_),
+                  nmuni = nrow(muni_),
+                  low = muni_$minId,
+                  high = muni_$maxId)
+
+data <- list(animals = muni_$animals,
+             dwat = spoly_$dwat,
+             tree = spoly_$tree)
+```
+
+Note that here we are assuming that animal are counted without error. This is not realistic, but I want to keep the example as simple as possible. I'll make some commentaries about this later. Finally we can specify the NIMBEL model
+
+```{r ch13, message=FALSE, fig.height = 6.25, fig.width = 6, fig.align = "center"}
+
+simuCoS <- nimble::nimbleCode( {
+ # PRIORS
+
+  b_intercept ~ dnorm(0, 2)
+  b_dwat ~ dnorm(0, 2)
+  b_tree ~ dnorm(0, 2)
+  
+  # LIKELIHOOD
+  for(i in 1:ncell){
+    log(lambda[i]) <- b_intercept + b_dwat*dwat[i] + b_tree*tree[i]
+    n[i] ~ dpois(lambda[i])
+  }
+  
+  # Sampling model. This is the part that changes respect the previous model
+  # Here the counted animals per municipality is distributed following a
+  # Poisson distribution with lambda = lamnda_muni
+  # lambda_muni is simpy the summatory of cell lambda in each municipality
+  for(j in 1:nmuni){
+    log(lambda_muni[j]) <-log(sum(lambda[low[j]:high[j]])) 
+    animals[j] ~ dpois(lambda_muni[j])
+    }
+} )
+
+# Once the model is defined, we should provide a function to get some random
+# initial values for each of our parameters (sampled from an uniform 
+# distribution, for example)
+
+inits <- function() {
+  base::list(n = rep(1, constants$ncell),
+             b_intercept = runif(1, -1, 1),
+             b_dwat = runif(1, -1, 1),
+             b_tree = runif(1, -1, 1)
+  )
+}
+```
+
+Once again, we define the rest settings and run the MCMC
+
+```{r ch14, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center", cache = TRUE}
+# Set values we are interested in
+keepers <- c("lambda", 'b_intercept', "b_dwat", "b_tree")
+
+# Finally we define the settings of our MCMC algorithm
+nc <- 2 # number of chains
+nb <- 1000 # number of initial MCMC iterations to discard
+ni <- nb + 20000 # total number  of iterations
+
+# Now he create the model
+model <- nimble::nimbleModel(code = simuCoS, 
+                             data = data, 
+                             constants = constants, 
+                             inits = inits())
+
+# Check if everything is initialized (I understand this)
+model$initializeInfo()
+
+# Compile the model (I'm lost here. In general I understand, but I'm not able
+# to modify any configuration rigth now)
+c_model <- nimble::compileNimble(model)
+model_conf <- nimble::configureMCMC(model)
+model_conf$addMonitors(keepers)
+model_mcmc <- nimble::buildMCMC(model_conf)
+c_model_mcmc <- nimble::compileNimble(model_mcmc, project = model)
+
+# Run the MCMC
+samples <- nimble::runMCMC(c_model_mcmc, 
+                           nburnin = nb, 
+                           niter = ni, 
+                           nchains = nc)
+```
+
+Traceplot exploration:
+
+```{r ch15, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center", cache = TRUE}
+# We can use now the coda package to see MCMC results
+samples_mcmc <- coda::as.mcmc.list(lapply(samples, coda::mcmc))
+
+# Look at traceplots (3 chains) of the three parameters
+par(mfrow=c(1,3))
+coda::traceplot(samples_mcmc[, 1:3])
+# Calculate Rhat convergence diagnostic for the three parameters
+coda::gelman.diag(samples_mcmc[,1:3])
+```
+
+Trace plots are much nicer, which I think it is normal since now we are sampling the whole study area. However it is interesting how aggregated counts can be able to infer accurately the simulated coefficients.
+
+
+```{r ch16, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center", cache = TRUE}
+# extract mean for each parameter
+samplesdf <- as.data.frame(rbind(samples_mcmc$chain1,samples_mcmc$chain2))
+mValues <- colMeans(samplesdf)
+# We can inspect the mean of posterior distributions for each parameter
+# Remember that real values were: int=2; dwat=-0.5; tree=0.3
+mValues[1:3]
+```
+Look at this accuracy! Pretty cool :)
+
+```{r ch17, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center", cache = TRUE}
+# Now we can plot lambda predictions and SD for each cell
+pred <- sarea
+# Notice that we changed the cellID so we have to use old IDs
+pred[spoly_$cellId] <- mValues[4:length(mValues)]
+
+par(mfrow = c(1,3))
+plot(sarea, main = "Animal abundance per cell")
+plot(pred, main = "Predicted abundance per cell")
+plot(pred[], sarea[], pch = 16, cex = .8)
+abline(a=1, b=1, col = "darkred", lwd = 2)
+
+```
+<br/><br/>
+
+## Some "advanced" questions
+
+In addition to review these models and to talk about other possibilities we have with the available data I would like to highlight two topics I was testing/thinking about.
+
+1.    Including some kind of spatial autocorrelation control in response variable (via iCAR for example). I've worked with iCAR in hSDM and INLA. I tried to apply this model in the same way as Gilbert et al. 2021, but with more complex datasets it resulted in impossible waiting times. Gilbert et al. includes in the likelihood formula `s[i]` parameter in the way:
+
+```{r ch18, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center", eval = FALSE}
+
+# CAR prior for spatial random effect
+  s[1:ncell] ~ dcar_normal(adj[1:neigh], weights[1:neigh], num[1:ncell], tau)
+  # precision of CAR prior
+  tau ~ dgamma(1, 1)
+  
+# LIKELIHOOD
+  for(i in 1:ncell){
+    log(lambda[i]) <- s[i] + b_intercept + b_dwat*dwat[i] + b_tree*tree[i]
+    n[i] ~ dpois(lambda[i])
+  }
+
+```
+
+being `adj` the adjacent neighborhood of each cell and `weights` an all 1 vector (equal weight). I understand the complexity of this model (in a dataset with 50,000 cells there are around 400,000 neighbors) but I wonder if there would be some way to optimize this model. <br/><br/>
+
+2.    This is maybe a more complex/long term issue, not necessary to afford right now, but I'd like to make of this one of the central research of my postdoc (in addition to data integration, but I think this could be a good previous step). One of the (many) problems in using hunting yields (HY) as abundance indices is the effort control. You usually assume that there exist a linear and homogeneous relationship between HY and abundance. While this could be more or less true when you work with general patterns and huge data sets, but it's obvious that effort plays a rol, and this effort is variable in space (among hunting grounds, regions, countries etc.) and time (seasons, years, etc.). A possible solution could be to use any covariate as an effort surrogate, such as number of hunting authorizations in a province, which is an information that is usually available. Gilbert et al. define their model as:
+
+\begin{equation}
+\tag{Eq 3}\label{eq3}
+log(\lambda County_{c}) = \gamma_{0} + \gamma_{1}log(\sum_{1=c1}^{n=c2}\lambda_{i})
+\end{equation}
+
+
+\begin{equation}
+\tag{Eq 4}\label{eq4}
+Harvest_{c} \sim Poisson(effort_{c} * \lambda County_{c})
+\end{equation}
+
+  being $Harvest_{c}$ the number of animals hunted in the county $c$, $effort_{c}$ any covariate related with effort at county $c$ (namely hunting authorizations), $\lambda County_{c}$ the $\lambda$ parameter of a Poisson process at county level, $c1$ and $c2$ index the first and last cells, respectively, to fall within county $c$, and $\gamma_{0}$ and $\gamma_{1}$ the intercept and slope of the equation scaling fine-resolution expected abundance to county-resolution expected abundance.<br/> 
+My point here is that in the most cases, such effort covariate is not available: because the authorizations number is not a good surrogate of effort, because such data is not available, or many other reasons. My question here is if it could be possible some kind of estimation of this parameter by using integrated models. That is if, using another independent source of abundance information (camera-traps, distance sampling, etc), it could be possible to estimate some kind of effort? Maybe I have to better develop this question, but is something I'm always thinking in background, some kind of "effort modeling" maybe? <br/> 
+I have some ideas such as categorize each hunting ground in different classes depending on the game species present. Often, the presence of species such as fallow deer, mouflon or Barbary sheep (which are not endemic in the Iberian Peninsula) indicate a very intensive hunting activity. Can we include these classes as a categorical factor and let the integrated model vary the intercept of each categorical class, estimating a kind of effort based on the class of each unit and accounting for another independent source of information. Anyway, we can talk about this anytime.<br/> 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
