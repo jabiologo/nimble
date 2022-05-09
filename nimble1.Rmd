@@ -85,6 +85,8 @@ Now we'll simulate a sampling procedure in 50 sites with perfect detectability (
 
 ```{r ch2, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center"}
 library(nimble)
+library(nimbleSCR)
+
 # These will be the sampled cells
 siteID <- sample(1:ncell(sarea), 50)
 
@@ -110,7 +112,8 @@ Then, we can describe our model. We have a whole study area with 50x50 cells (25
 DISCLAIMER: I started with this simulations before your workshop at GdR, so I was mainly following [scrips](https://github.com/n-a-gilbert/isdm_examples) from Gilbert et al. (2021) [Integrating harvest and camera trap data in species distribution models](https://www.sciencedirect.com/science/article/abs/pii/S0006320721001993). So probably the way in which I specify the models or some other things related to NIMBLE usage doesn't match with your "way to do". These are things I'd like to learn during the next years, to better understand the NIMBLE "stuff". Anyway, the model:
 
 ```{r ch5, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center"}
-simuPoiss <- nimble::nimbleCode( {
+
+simuPoiss <- nimbleCode( {
   # PRIORS (I use kind of informative priors since I already know the "real" 
   # coeficients, but I imagine I'd use uniform in real life...)
   # Intercept
@@ -124,10 +127,19 @@ simuPoiss <- nimble::nimbleCode( {
   # Simple Poisson model for "latent state". N ~ Poiss(lambda) being 
   # log(lambda) = b0 + b1X1 + b2X2. The loop will iterate thought our sampled
   # data
+  #for(i in 1:ncell){
+  #  log(lambda[i]) <- b_intercept + b_dwat*dwat[i] + b_tree*tree[i]
+  #  n[i] ~ dpois(lambda[i])
+  #}
+  
+  # Trying vectorization rather than a loop to improve computation time
+  log(lambda[1:ncell]) <- b_intercept+b_dwat*dwat[1:ncell]+b_tree*tree[1:ncell]
+  
+  # dbinom_vector exist but not dpois_vector... write it down?
   for(i in 1:ncell){
-    log(lambda[i]) <- b_intercept + b_dwat*dwat[i] + b_tree*tree[i]
     n[i] ~ dpois(lambda[i])
   }
+  
   
   # Sampling model. This is something I really don't know if I'm doing well.
   # I tried to model directly sampling and latent state at the same time, since 
@@ -166,14 +178,17 @@ nb <- 1000 # number of initial MCMC iterations to discard
 ni <- nb + 20000 # total number  of iterations
 ```
 
-Now comes the tricky part for me, mainly because I'm not familiar with NIMBLE. I saw in the GdR workshol you did this part in a different way, but I still have to "study" this part. I understand (imagine) that in this chunk of code you are preparing and compiling the code to be run in C++. But I really don't know exactly what are you doing at each step. When running more complex models I get long waiting times in this part, and I really don't know how to increase the speed of this step :S. Definetively this is something I'd like to learn. My laptop specifications are: Linux machine, IntelCore i7 10th generation with 64G RAM. 
+Now comes the tricky part for me, mainly because I'm not familiar with NIMBLE. I saw in the GdR workshol you did this part in a different way, but I still have to "study" this part. I understand (imagine) that in this chunk of code you are preparing and compiling the code to be run in C++. But I really don't know exactly what are you doing at each step. When running more complex models I get long waiting times in this part, and I really don't know how to increase the speed of this step :S. Definitively this is something I'd like to learn. My laptop specifications are: Linux machine, IntelCore i7 10th generation with 64G RAM. 
 
 ```{r ch7, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center", cache = TRUE,}
 # Now he create the model
-model <- nimble::nimbleModel(code = simuPoiss, 
+model <- nimbleModel(code = simuPoiss, 
                              data = data, 
                              constants = constants, 
-                             inits = inits())
+                             inits = inits(),
+                             calculate = FALSE) # disable the calculation of all 
+                                                # deterministic nodes and 
+                                                # log-likelihood 
 
 # Check if everything is initialized (I understand this)
 model$initializeInfo()
@@ -181,7 +196,10 @@ model$initializeInfo()
 # Compile the model (I'm lost here. In general I understand, but I'm not able
 # to modify any configuration rigth now)
 c_model <- nimble::compileNimble(model)
-model_conf <- nimble::configureMCMC(model)
+model_conf <- nimble::configureMCMC(model,
+                                    useConjugacy = FALSE) # disable the search 
+                                                          # for conjugate 
+                                                          # samplers
 model_conf$addMonitors(keepers)
 model_mcmc <- nimble::buildMCMC(model_conf)
 c_model_mcmc <- nimble::compileNimble(model_mcmc, project = model)
