@@ -2,6 +2,7 @@
 
 set.seed(3)
 library(dismo)
+library(rgeos)
 library(terra)
 library(sf)
 library(dplyr)
@@ -41,7 +42,7 @@ plot(sarea, main = "Animal abundance per cell")
 library(nimble)
 library(nimbleSCR)
 
-# Firstly, we create some municipalityes using random points  and Voronoi 
+# Firstly, we create some municipalities using random points and Voronoi 
 # polygons
 l1 <- randomPoints(sarea, 50)
 muni <- crop(voronoi(l1, ext = extent(sarea)),sarea)
