@@ -90,6 +90,11 @@ cor(muni_$animals, muni_$eff)
 plot(muni_$animals, muni_$hy)
 cor(muni_$animals, muni_$hy)
 
+plot(sarea)
+lines(muni)
+plot(muni_["animals"])
+plot(muni_[c(2,9)])
+
 constants <- list(ncell = nrow(spoly_),
                   nmuni = nrow(muni_),
                   low = muni_$minId,
@@ -184,17 +189,17 @@ mValues <- colMeans(samplesdf)
 mValues[1:4]
 
 # Now we can plot lambda predictions and SD for each cell
-pred <- sarea
+pred1 <- sarea
 # Notice that we changed the cellID so we have to use old IDs
-pred[spoly_$cellId] <- mValues[4:length(mValues)]
+pred1[spoly_$cellId] <- mValues[4:length(mValues)]
 
 par(mfrow = c(1,3))
 plot(sarea, main = "Animal abundance per cell")
-plot(pred, main = "Predicted abundance per cell")
-plot(pred[], sarea[], pch = 16, cex = .8)
+plot(pred1, main = "Predicted abundance per cell")
+plot(pred1[], sarea[], pch = 16, cex = .8)
 abline(a=1, b=1, col = "darkred", lwd = 2)
 sum(sarea[])
-sum(pred[])
+sum(pred1[])
 
 # Including effort in modeling as a constant?
 
@@ -286,17 +291,177 @@ mValues <- colMeans(samplesdf)
 mValues[1:4]
 
 # Now we can plot lambda predictions and SD for each cell
-pred <- sarea
+pred2 <- sarea
 # Notice that we changed the cellID so we have to use old IDs
-pred[spoly_$cellId] <- mValues[5:length(mValues)]
+pred2[spoly_$cellId] <- mValues[5:length(mValues)]
 
 par(mfrow = c(1,3))
 plot(sarea, main = "Animal abundance per cell")
-plot(pred, main = "Predicted abundance per cell")
-plot(pred[], sarea[], pch = 16, cex = .8)
+plot(pred2, main = "Predicted abundance per cell")
+plot(pred2[], sarea[], pch = 16, cex = .8)
 abline(a=1, b=1, col = "darkred", lwd = 2)
 sum(sarea[])
-sum(pred[])
+sum(pred2[])
 
+par(mfrow = c(1,2))
+plot(pred1[], sarea[], pch = 16, cex = .8)
+abline(a=1, b=1, col = "darkred", lwd = 2)
+plot(pred2[], sarea[], pch = 16, cex = .8)
+abline(a=1, b=1, col = "darkred", lwd = 2)
+
+# Including a categorical factor as a proxy of effort? (type of hunting ground)
+
+muni_$eff <- runif(nrow(muni_),0,0.5)
+muni_$hy <- round(muni_$animals * muni_$eff, 0)
+
+plot(muni_$animals, muni_$eff)
+cor(muni_$animals, muni_$eff)
+
+plot(muni_$animals, muni_$hy)
+cor(muni_$animals, muni_$hy)
+
+plot(sarea)
+lines(muni)
+plot(muni_["animals"])
+plot(muni_[c(2,9)])
+
+library(Hmisc)
+library(fastDummies)
+library(dplyr)
+library(tidyverse)
+
+
+ff <- cut2(muni_$eff, g = 3)
+levels(ff) <- c("1", "2", "3")
+
+fastDummies::dummy_cols(ff) %>% as_tibble() %>% 
+  dplyr::select(.data_1:.data_3) %>% 
+  rename(Cat1 = .data_1, Cat2 = .data_2, Cat3 = .data_3) -> dummies
+muni_$cat2 <- dummies$Cat2
+muni_$cat3 <- dummies$Cat3
+
+
+constants <- list(ncell = nrow(spoly_),
+                  nmuni = nrow(muni_),
+                  low = muni_$minId,
+                  high = muni_$maxId)
+
+data <- list(animals = muni_$hy,
+             dwat = spoly_$dwat,
+             tree = spoly_$tree,
+             cat2 = muni_$cat2,
+             cat3 = muni_$cat3)
+
+
+
+
+simuCat <- nimble::nimbleCode( {
+  # PRIORS
+  
+  b_intercept ~ dnorm(0, 2)
+  b_dwat ~ dnorm(0, 2)
+  b_tree ~ dnorm(0, 2)
+  b_cat2 ~ dunif(0.2, .5)
+  b_cat3 ~ dunif(0.5, 1)
+  #b_eff ~ dunif(0, 0.5)
+  
+  # LIKELIHOOD
+  for(i in 1:ncell){
+    log(lambda[i]) <- b_intercept + b_dwat*dwat[i] + b_tree*tree[i]
+    n[i] ~ dpois(lambda[i])
+  }
+  
+  # Sampling model. This is the part that changes respect the previous model
+  # Here the counted animals per municipality is distributed following a
+  # Poisson distribution with lambda = lambda_muni
+  # lambda_muni is simply the sum of cell lambda in each municipality
+  for(j in 1:nmuni){
+    log(lambda_muni[j]) <- log(sum(lambda[low[j]:high[j]])) 
+    animals[j] ~ dpois(lambda_muni[j]) #  b_cat2*cat2[j] + b_cat3*cat3[j] + 
+  }
+} )
+
+# Once the model is defined, we should provide a function to get some random
+# initial values for each of our parameters (sampled from an uniform 
+# distribution, for example)
+
+inits <- function() {
+  base::list(n = rep(1, constants$ncell),
+             b_intercept = runif(1, -1, 1),
+             b_dwat = runif(1, -1, 1),
+             b_tree = runif(1, -1, 1),
+             b_cat2 = runif(1, 0, 1)
+             #b_cat3 = runif(1, 0, 1)
+             #eff = runif(1,0,0.5)
+  )
+}
+
+# Set values we are interested in
+keepers <- c("lambda", 'b_intercept', "b_dwat", "b_tree", "b_cat2")
+
+# Finally we define the settings of our MCMC algorithm
+nc <- 2 # number of chains
+nb <- 1000 # number of initial MCMC iterations to discard
+ni <- nb + 20000 # total number  of iterations
+
+# Now he create the model
+model <- nimble::nimbleModel(code = simuCat, 
+                             data = data, 
+                             constants = constants, 
+                             inits = inits(),
+                             calculate = FALSE)
+
+# Check if everything is initialized (I understand this)
+model$initializeInfo()
+
+# Compile the model (I'm lost here. In general I understand, but I'm not able
+# to modify any configuration right now)
+c_model <- nimble::compileNimble(model)
+model_conf <- nimble::configureMCMC(model,
+                                    useConjugacy = FALSE)
+model_conf$addMonitors(keepers)
+model_mcmc <- nimble::buildMCMC(model_conf)
+c_model_mcmc <- nimble::compileNimble(model_mcmc, project = model)
+
+# Run the MCMC
+samples <- nimble::runMCMC(c_model_mcmc, 
+                           nburnin = nb, 
+                           niter = ni, 
+                           nchains = nc)
+
+# We can use now the coda package to see MCMC results
+samples_mcmc <- coda::as.mcmc.list(lapply(samples, coda::mcmc))
+
+# Look at traceplots (3 chains) of the three parameters
+par(mfrow=c(1,3))
+coda::traceplot(samples_mcmc[, 1:3])
+# Calculate Rhat convergence diagnostic for the three parameters
+coda::gelman.diag(samples_mcmc[,1:3])
+
+# extract mean for each parameter
+samplesdf <- as.data.frame(rbind(samples_mcmc$chain1,samples_mcmc$chain2))
+mValues <- colMeans(samplesdf)
+# We can inspect the mean of posterior distributions for each parameter
+# Remember that real values were: int=2; dwat=-0.5; tree=0.3
+mValues[1:6]
+
+# Now we can plot lambda predictions and SD for each cell
+pred3 <- sarea
+# Notice that we changed the cellID so we have to use old IDs
+pred3[spoly_$cellId] <- mValues[5:length(mValues)]
+
+par(mfrow = c(1,3))
+plot(sarea, main = "Animal abundance per cell")
+plot(pred3, main = "Predicted abundance per cell")
+plot(pred3[], sarea[], pch = 16, cex = .8)
+abline(a=1, b=1, col = "darkred", lwd = 2)
+sum(sarea[])
+sum(pred3[])
+
+par(mfrow = c(1,2))
+plot(pred1[], sarea[], pch = 16, cex = .8)
+abline(a=1, b=1, col = "darkred", lwd = 2)
+plot(pred3[], sarea[], pch = 16, cex = .8)
+abline(a=1, b=1, col = "darkred", lwd = 2)
 
 
