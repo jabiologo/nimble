@@ -1,0 +1,310 @@
+---
+title: "Addressing hunting pressure using categorical factors"
+author: "Javier Fernández-López"
+date: "18/05/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Animal abundance and hunting grounds simulation
+We'll follow the same previous approach to simulate animal abundance and hunting ground.
+
+```{r ch1, message=FALSE, fig.height = 9, fig.width = 8, fig.align = "center"}
+set.seed(3)
+library(terra)
+library(sf)
+library(dplyr)
+library(dismo)
+library(rgeos)
+
+# Create a study area
+sarea <- raster(nrows = 50, ncols = 50, xmn = 0, xmx = 50, ymn = 0, ymx = 50)
+# Distance to water point covariate
+dwat <- scale(distanceFromPoints(sarea, c(15,15)))
+# Tree cover covariate
+tree <- raster(nrows = 5, ncols = 5, xmn = 0, xmx = 50, ymn = 0, ymx = 50)
+tree[] <- runif(25, 1,10)
+tree <- scale(disaggregate(tree,10, "bilinear"))
+
+# Lambda parameter for the Poisson distribution of the abundance will be 
+# function from "distance to water point" and "tree cover" with the following
+# coefficients
+beta0 <- 2
+beta1 <- -0.5
+beta2 <- 0.3
+lambda <- exp(beta0 + beta1*(dwat) + beta2*(tree))
+
+# Now we can fill each cell of our study area with a random number from a 
+# Poisson distribution with a different lambda at each site/cell (IPPP)
+for (i in 1:ncell(sarea)){
+  sarea[i] <- rpois(1, lambda[i])
+}
+
+# Plot the different variables and the study area
+par(mfrow = c(2,2))
+plot(dwat, main = "Distance to the water point")
+plot(tree, main = "Tree cover")
+plot(lambda, main = "Lambda parameter of the IPPP")
+plot(sarea, main = "Animal abundance per cell")
+
+# Hunting ground simulation. Firstly, we create some municipalities using 
+# random points and Voronoi polygons
+l1 <- randomPoints(sarea, 50)
+muni <- crop(voronoi(l1, ext = extent(sarea)),sarea)
+
+# Here we transform our raster in polygons to work with dataframes
+spoly <- rasterToPolygons(sarea)
+names(spoly) <- "animals"
+spoly$cellId <- 1:nrow(spoly)
+
+# This ugly chunk is to assign each cell to a polygon
+spoints <- rasterToPoints(sarea)
+ex <- terra::extract(muni,spoints[,1:2])
+ex <- ex[!duplicated(ex$point.ID),]
+spoly$muni <- ex$poly.ID
+
+# Finally, another ugly code to name cell IDs in order inside each polygon
+# To invoke Change of Support we need cells having an ascendant order inside
+# each polygon, so cell IDs in polygon 1 will be from 1 to 9, cells in polygon
+# 2 will be from 10 to 15, in polygon 3 will be from 16 to 22, etc.
+# (Note that numbers are invented)
+spoly_<-st_as_sf(spoly) %>% arrange(muni) %>% mutate(cellIdNew=1:nrow(spoly))
+#plot(st_as_sf(spoly_)["cellId"])
+#plot(st_as_sf(spoly_)["cellIdNew"])
+spoly_$dwat <- dwat[spoly_$cellId]
+spoly_$tree <- tree[spoly_$cellId]
+# Here we count number of animals and we take the mean of predictor covariates
+# for each municipality
+muni_ <- spoly_ %>% group_by(muni) %>% dplyr::summarise(animals=sum(animals),
+                                                        minId=min(cellIdNew), 
+                                                        maxId=max(cellIdNew),
+                                                        dwat=mean(dwat),
+                                                        tree=mean(tree))
+```
+```{r ch2, message=FALSE, fig.height = 5, fig.width = 4, fig.align = "center"}
+plot(muni_["animals"], pal = terrain.colors(13, rev = T))
+```
+<br/><br/>
+
+# Hunting pressure definition and simulation
+We'll define _hunting pressure_ as the percentage of animals hunted per hunting ground. We assume that _hunting pressure_ is the combination of several factors (adapted from Vajas et al. 2021):
+
+\begin{equation}
+\tag{Eq 1}\label{eq1}
+huntingPressure \sim catchability * effort
+\end{equation}
+
+Here, _catchability_ would be related to the efficacy to catch an animal and it would be affected by many factors such as the habitat (open/closed), kind of hunting activity (driven hunt, stalking, etc.), weather, hunter ability, etc. Similarly, _effort_ would be related to the total number of hunters and/or hours during the hunting season. Anyway, here we will focus in *hunting pressure*.<br/>
+We'll simulate a random hunting pressure per hunting ground between 0 and 50% of animals hunted.
+
+```{r ch3, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center"}
+muni_$press <- runif(nrow(muni_),0,0.5)
+muni_$hy <- round(muni_$animals * muni_$press, 0)
+
+par(mfrow=c(1,3))
+plot(muni_$animals, muni_$press, pch = 16, xlab = "ANIMALS", ylab = "HUNTING PRESSURE")
+plot(muni_$animals, muni_$hy, pch = 16, xlab = "ANIMALS", ylab = "HUNTING YIELD")
+plot(muni_$press, muni_$hy, pch = 16, xlab = "HUNTING PRESSURE", ylab = "HUNTING YIELD")
+```
+
+
+```{r ch4, message=FALSE, fig.height = 4, fig.width = 3, fig.align = "center"}
+plot(muni_["animals"], pal = terrain.colors(13, rev = T), main = "Animals")
+plot(muni_["press"],  pal = heat.colors(10, rev = T), main = "Hunting pressure")
+plot(muni_["hy"], pal = terrain.colors(9, rev = T), main = "Hunting yield (animals * pressure)")
+```
+
+# Hunting ground categorization
+<br/><br/>
+Now we'll categorize our hunting grounds in three categories depending on the hunting pressure. This categorization could be difficult in real life, since the only data we would have to do this categorization would be the hunting bags and trends for game species at each hunting ground... And we cannot be sure that this categorization correspond to hunting pressure... But anyway, this is a first approach to test the model parameterization.
+
+
+```{r ch5, message=FALSE, fig.height = 4, fig.width = 3, fig.align = "center"}
+library(Hmisc)
+library(fastDummies)
+library(dplyr)
+library(tidyverse)
+
+ff <- cut2(muni_$press, g = 3)
+levels(ff) <- c("1", "2", "3")
+
+dd <- fastDummies::dummy_cols(ff) %>% as_tibble()
+names(dd) <- c("CatT", "Cat1", "Cat2", "Cat3")
+muni_$catT <- as.numeric(as.character(dd$CatT))
+muni_$cat1 <- dd$Cat1
+muni_$cat2 <- dd$Cat2
+muni_$cat3 <- dd$Cat3
+
+plot(muni_["catT"], main = "Hunting ground Category")
+```
+
+Now we are ready to run our model. We'll follow the same approach as in previous examples, following Gilbert et al. (2021) and addressing a "change of support" to produce abundance predictions at cell level. The simulated scenario at hunting ground level follows this equation (I think so...)
+
+\begin{equation}
+\tag{Eq 2}\label{eq2}
+Harvest_{hg} \sim Poisson(pressure_{hg} * \lambda_{hg})
+\end{equation}
+
+However, since we have not a direct measure of the pressure, we'll "parameterize" the model by using our hunting ground categorization as follows:
+
+\begin{equation}
+\tag{Eq 3}\label{eq3}
+Harvest_{hg} \sim Poisson(\theta_{1} * Cat1 * \lambda_{hg} + \theta_{2} * Cat2 * \lambda_{hg} + \theta_{3} * Cat3 * \lambda_{hg})
+\end{equation}
+
+were _Cat1_ is a vector with 1 for those hunting grounds belonging Category 1 and 0 otherwise; _Cat2_ is the same for Category 2 and so; and $\theta_1$,$\theta_2$ and $\theta_3$ are the parameters to be estimated in our model that module the pressure at each hunting ground category. Notice that numbers doesn't represent order. I'm not sure if this is the way tho write down the idea... I wonder if we can just use two categories in the formula (if _C_ is the number of categories, using just _C-1_ in the formula would be enogth...). Anyway, let's build the NIMBLE model and discuss it later.
+
+```{r ch6, message=FALSE, fig.height = 4, fig.width = 9, fig.align = "center", cache = TRUE}
+library(nimble)
+library(nimbleSCR)
+
+constants <- list(ncell = nrow(spoly_),
+                  nmuni = nrow(muni_),
+                  low = muni_$minId,
+                  high = muni_$maxId)
+
+data <- list(animals = muni_$hy,
+             dwat = spoly_$dwat,
+             tree = spoly_$tree,
+             cat1 = muni_$cat1,     # Here we include the Hg category
+             cat2 = muni_$cat2,     # Here we include the Hg category
+             cat3 = muni_$cat3)     # Here we include the Hg category
+
+
+# I'm not implementing the vectorization in likelihoods yet! But it's in my 
+# "to do" list :)
+
+simuCat <- nimble::nimbleCode( {
+  # PRIORS
+  
+  b_intercept ~ dnorm(0, 2)
+  b_dwat ~ dnorm(0, 2)
+  b_tree ~ dnorm(0, 2)
+  b_cat1 ~ dunif(0, 0.5)            # This is a tricky part. See below
+  b_cat2 ~ dunif(0, 0.5)            # This is a tricky part. See below
+  b_cat3 ~ dunif(0, 0.5)            # This is a tricky part. See below
+  
+  # LIKELIHOOD
+  for(i in 1:ncell){
+    log(lambda[i]) <- b_intercept + b_dwat*dwat[i] + b_tree*tree[i]
+    n[i] ~ dpois(lambda[i])
+  }
+  
+  # Here we include the hunting ground categories as we defined previously 
+  for(j in 1:nmuni){
+    log(lambda_muni[j]) <- log(sum(lambda[low[j]:high[j]])) 
+    animals[j] ~ dpois((b_cat1*cat1[j]*lambda_muni[j]) + (b_cat2*cat2[j]*lambda_muni[j]) + (b_cat3*cat3[j]*lambda_muni[j]))
+  }
+} )
+
+
+inits <- function() {
+  base::list(n = rep(1, constants$ncell),
+             b_intercept = runif(1, -1, 1),
+             b_dwat = runif(1, -1, 1),
+             b_tree = runif(1, -1, 1),
+             b_cat1 = runif(1, 0, 0.5),
+             b_cat2 = runif(1, 0, 0.5),
+             b_cat3 = runif(1, 0, 0.5)
+  )
+}
+
+# Set values we are interested in
+keepers <- c("lambda", 'b_intercept', "b_dwat", "b_tree", "b_cat1", "b_cat2", "b_cat3")
+
+# Finally we define the settings of our MCMC algorithm
+nc <- 2 # number of chains
+nb <- 1000 # number of initial MCMC iterations to discard
+ni <- nb + 20000 # total number  of iterations
+
+# Now he create the model
+model <- nimble::nimbleModel(code = simuCat, 
+                             data = data, 
+                             constants = constants, 
+                             inits = inits(),
+                             calculate = FALSE)
+
+# Check if everything is initialized (I understand this)
+model$initializeInfo()
+
+# Compile the model (I'm lost here. In general I understand, but I'm not able
+# to modify any configuration right now)
+c_model <- nimble::compileNimble(model)
+model_conf <- nimble::configureMCMC(model,
+                                    useConjugacy = FALSE)
+model_conf$addMonitors(keepers)
+model_mcmc <- nimble::buildMCMC(model_conf)
+c_model_mcmc <- nimble::compileNimble(model_mcmc, project = model)
+
+# Run the MCMC
+samples <- nimble::runMCMC(c_model_mcmc, 
+                           nburnin = nb, 
+                           niter = ni, 
+                           nchains = nc)
+
+# We can use now the coda package to see MCMC results
+samples_mcmc <- coda::as.mcmc.list(lapply(samples, coda::mcmc))
+
+# Look at traceplots (3 chains) of the three parameters
+par(mfrow=c(2,3))
+coda::traceplot(samples_mcmc[, 1:6])
+# Calculate Rhat convergence diagnostic for the three parameters
+coda::gelman.diag(samples_mcmc[,1:6])
+
+# extract mean for each parameter
+samplesdf <- as.data.frame(rbind(samples_mcmc$chain1,samples_mcmc$chain2))
+mValues <- colMeans(samplesdf)
+# We can inspect the mean of posterior distributions for each parameter
+# Remember that real values were: int=2; dwat=-0.5; tree=0.3
+mValues[1:6]
+```
+<br/><br/>
+As we can see, environmental covariates estimates and hunting pressure estimates are more or less well sampled. I wonder what does it mean the traceplot for $\theta_3$. I understand that the prior is a uniform between 0 and 0.5, and for this reason the traceplot seems like cut for upper values... but does it mean that the model would increase the parameter value and is the prior who is not allowing to do that?<br/><br/>
+Anyway, values for $\theta_1$,$\theta_2$ and $\theta_3$ are pretty accurate, and they represent correctly the hunting pressure for each hunting ground category:
+
+```{r ch7, message=FALSE, fig.height = 5, fig.width = 5, fig.align = "center"}
+pressEst <- data.frame(cbind(c(samples_mcmc$chain2[,1],samples_mcmc$chain2[,2],samples_mcmc$chain2[,3]),
+c(rep(1,length(samples_mcmc$chain2[,1])), rep(2,length(samples_mcmc$chain2[,1])), 
+  rep(3,length(samples_mcmc$chain2[,1])))))
+boxplot(X1 ~ X2, data = pressEst, xlab = "Hunting ground Category", ylab = "Estimated Pressure", cex.lab = 1.4, col = c("darkblue", "purple", "yellow"))
+```
+<br/><br/>
+As a consequence, the obtained animal predictions at level cell are very accurate! 
+
+```{r ch8, message=FALSE, fig.height = 3.5, fig.width = 8, fig.align = "center"}
+pred <- sarea
+pred[spoly_$cellId] <- mValues[7:length(mValues)]
+par(mfrow = c(1,3))
+plot(sarea, main = "Animal abundance per cell")
+plot(pred, main = "Predicted abundance per cell")
+plot(pred[], sarea[], pch = 16, cex = .8, xlab = "predicted", ylab = "observed", cex.lab = 1.5)
+abline(a=1, b=1, col = "darkred", lwd = 2)
+# Total simulated animals
+sum(sarea[])
+# Total estimated animals
+sum(pred[])
+```
+<br/><br/>
+
+In summary, we were able to parameterize a model to take into account hunting pressure in a categorical way. From here, I have to main questions:
+
+1. This approach strongly depends on our ability to make some categories that include information about hunting pressure (as it is defined here). Our proposal is to use hunting yields and trends from similar species (ungulates) to categorize each hunting ground. We strongly think that hunting yield contains information about hunting pressure (obviously)... but of course it's not gonna be as neat as in the simulations...
+2. I'm kind of worried about the "pressure priors", since they strongly affects the results. Here I chose $Uniform(0, 0.5)$ for them because I knew that hunting pressure was a random number between 0 and 0.5. When I changed the priors to $Uniform(0,1)$ (representing an absolute ignorance about the hunting pressure), $\theta_1$,$\theta_2$ and $\theta_3$ were proportionally increased, producing misleading abundance estimates. Fortunately, we aren't absolutely ignorant about the hunting pressure. We know that the hunting pressure can be 0 for many reasons: urban areas, National Parks, etc. However, we know that the hunting pressure is not gonna be 1 (100%), because it would mean population extinction. We also have some clues from hunting trends. For example, in Castilla - La Mancha, hunting is the most important mortality factor for ungulates. Hunting trends are increasing since many years ago and populations are not extinct, rather the opposite (population are increasing). So we think that hunting pressure (~mortality) shouldn't be higher that 60% (although this could be better estimated with proper population models, of course... :P). I said "kind of worried" because in this case I see Bayesian Inference as both, a problem since our results will strongly depend on priors, and an opportunity to include "external information" or our "believes" about the whole process...
+<br/><br/>
+
+These are the most important new points. Now I'm gonna use the data that we have from Castilla - La Mancha to run a first model with real data, by using the hunting ground categorization that we did several years ago. The GREAT point is that we also got density data from around 30 hunting grounds for red and roe deer (distance sampling) and from 10 hunting grounds for wild boar (camera traping - REM) in Castilla - La Mancha. So we could use this data for model evaluation!! :) :)
+
+
+
+
+
+

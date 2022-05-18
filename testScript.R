@@ -88,21 +88,15 @@ plot(muni_["animals"], pal = terrain.colors(13, rev = T))
 muni_$press <- runif(nrow(muni_),0,0.5)
 muni_$hy <- round(muni_$animals * muni_$press, 0)
 
+par(mfrow=c(1,3))
 plot(muni_$animals, muni_$press, pch = 16, xlab = "ANIMALS", ylab = "HUNTING PRESSURE")
-cor(muni_$animals, muni_$press)
-
 plot(muni_$animals, muni_$hy, pch = 16, xlab = "ANIMALS", ylab = "HUNTING YIELD")
-cor(muni_$animals, muni_$hy)
-
 plot(muni_$press, muni_$hy, pch = 16, xlab = "HUNTING PRESSURE", ylab = "HUNTING YIELD")
-cor(muni_$press, muni_$hy)
-
-plot(sarea)
-lines(muni)
-plot(muni_["animals"])
-plot(muni_[c(2,9)])
+dev.off()
+plot(muni_["animals"], pal = terrain.colors(13, rev = T), main = "Animals")
 plot(muni_["press"],  pal = heat.colors(10, rev = T), main = "Hunting pressure")
-plot(muni_["hy"], pal = terrain.colors(12, rev = T), main = "Hunting yield (animals * pressure)")
+plot(muni_["hy"], pal = terrain.colors(9, rev = T), main = "Hunting yield (animals * pressure)")
+
 
 library(Hmisc)
 library(fastDummies)
