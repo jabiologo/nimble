@@ -76,7 +76,7 @@ muni_ <- spoly_ %>% group_by(muni) %>% dplyr::summarise(animals=sum(animals),
                                                         dwat=mean(dwat),
                                                         tree=mean(tree))
 plot(sarea); lines(muni)
-plot(muni_["animals"])
+plot(muni_["animals"], pal = terrain.colors(13, rev = T))
 
 ################################################################################
 # Adding effort and hunting yields
@@ -314,16 +314,21 @@ abline(a=1, b=1, col = "darkred", lwd = 2)
 muni_$eff <- runif(nrow(muni_),0,0.5)
 muni_$hy <- round(muni_$animals * muni_$eff, 0)
 
-plot(muni_$animals, muni_$eff)
+plot(muni_$animals, muni_$eff, pch = 16, xlab = "ANIMALS", ylab = "HUNTING EFFORT")
 cor(muni_$animals, muni_$eff)
 
-plot(muni_$animals, muni_$hy)
+plot(muni_$animals, muni_$hy, pch = 16, xlab = "ANIMALS", ylab = "HUNTING YIELD")
 cor(muni_$animals, muni_$hy)
+
+plot(muni_$eff, muni_$hy, pch = 16, xlab = "HUNTING EFFORT", ylab = "HUNTING YIELD")
+cor(muni_$eff, muni_$hy)
 
 plot(sarea)
 lines(muni)
 plot(muni_["animals"])
 plot(muni_[c(2,9)])
+plot(muni_["eff"],  pal = heat.colors(10, rev = T), main = "Hunting effort")
+plot(muni_["hy"], pal = terrain.colors(10, rev = T), main = "Hunting yield (animals * effort)")
 
 library(Hmisc)
 library(fastDummies)
@@ -334,12 +339,15 @@ library(tidyverse)
 ff <- cut2(muni_$eff, g = 3)
 levels(ff) <- c("1", "2", "3")
 
-fastDummies::dummy_cols(ff) %>% as_tibble() %>% 
-  dplyr::select(.data_1:.data_3) %>% 
-  rename(Cat1 = .data_1, Cat2 = .data_2, Cat3 = .data_3) -> dummies
-muni_$cat2 <- dummies$Cat2
-muni_$cat3 <- dummies$Cat3
+dd <- fastDummies::dummy_cols(ff) %>% as_tibble() #%>% 
+  #dplyr::select(.data:.data_3) %>% 
+names(dd) <- c("CatT", "Cat1", "Cat2", "Cat3")
+muni_$catT <- as.numeric(as.character(dd$CatT))
+muni_$cat1 <- dd$Cat1
+muni_$cat2 <- dd$Cat2
+muni_$cat3 <- dd$Cat3
 
+plot(muni_["catT"], main = "Hunting ground Category")
 
 constants <- list(ncell = nrow(spoly_),
                   nmuni = nrow(muni_),
@@ -349,6 +357,7 @@ constants <- list(ncell = nrow(spoly_),
 data <- list(animals = muni_$hy,
              dwat = spoly_$dwat,
              tree = spoly_$tree,
+             cat1 = muni_$cat1,
              cat2 = muni_$cat2,
              cat3 = muni_$cat3)
 
@@ -361,8 +370,9 @@ simuCat <- nimble::nimbleCode( {
   b_intercept ~ dnorm(0, 2)
   b_dwat ~ dnorm(0, 2)
   b_tree ~ dnorm(0, 2)
-  b_cat2 ~ dunif(0.2, .5)
-  b_cat3 ~ dunif(0.5, 1)
+  b_cat1 ~ dunif(0, 0.5)
+  b_cat2 ~ dunif(0, 0.5)
+  b_cat3 ~ dunif(0, 0.5)
   #b_eff ~ dunif(0, 0.5)
   
   # LIKELIHOOD
@@ -377,7 +387,7 @@ simuCat <- nimble::nimbleCode( {
   # lambda_muni is simply the sum of cell lambda in each municipality
   for(j in 1:nmuni){
     log(lambda_muni[j]) <- log(sum(lambda[low[j]:high[j]])) 
-    animals[j] ~ dpois(lambda_muni[j]) #  b_cat2*cat2[j] + b_cat3*cat3[j] + 
+    animals[j] ~ dpois((b_cat1*cat1[j]*lambda_muni[j]) + (b_cat2*cat2[j]*lambda_muni[j]) + (b_cat3*cat3[j]*lambda_muni[j]))
   }
 } )
 
@@ -390,14 +400,15 @@ inits <- function() {
              b_intercept = runif(1, -1, 1),
              b_dwat = runif(1, -1, 1),
              b_tree = runif(1, -1, 1),
-             b_cat2 = runif(1, 0, 1)
-             #b_cat3 = runif(1, 0, 1)
+             b_cat1 = runif(1, 0, 1),
+             b_cat2 = runif(1, 0, 1),
+             b_cat3 = runif(1, 0, 1)
              #eff = runif(1,0,0.5)
   )
 }
 
 # Set values we are interested in
-keepers <- c("lambda", 'b_intercept', "b_dwat", "b_tree", "b_cat2")
+keepers <- c("lambda", 'b_intercept', "b_dwat", "b_tree", "b_cat1", "b_cat2", "b_cat3")
 
 # Finally we define the settings of our MCMC algorithm
 nc <- 2 # number of chains
@@ -433,27 +444,27 @@ samples <- nimble::runMCMC(c_model_mcmc,
 samples_mcmc <- coda::as.mcmc.list(lapply(samples, coda::mcmc))
 
 # Look at traceplots (3 chains) of the three parameters
-par(mfrow=c(1,3))
-coda::traceplot(samples_mcmc[, 1:3])
+par(mfrow=c(2,3))
+coda::traceplot(samples_mcmc[, 1:6])
 # Calculate Rhat convergence diagnostic for the three parameters
-coda::gelman.diag(samples_mcmc[,1:3])
+coda::gelman.diag(samples_mcmc[,1:6])
 
 # extract mean for each parameter
 samplesdf <- as.data.frame(rbind(samples_mcmc$chain1,samples_mcmc$chain2))
 mValues <- colMeans(samplesdf)
 # We can inspect the mean of posterior distributions for each parameter
 # Remember that real values were: int=2; dwat=-0.5; tree=0.3
-mValues[1:6]
+mValues[1:7]
 
 # Now we can plot lambda predictions and SD for each cell
 pred3 <- sarea
 # Notice that we changed the cellID so we have to use old IDs
-pred3[spoly_$cellId] <- mValues[5:length(mValues)]
+pred3[spoly_$cellId] <- mValues[7:length(mValues)]
 
 par(mfrow = c(1,3))
 plot(sarea, main = "Animal abundance per cell")
 plot(pred3, main = "Predicted abundance per cell")
-plot(pred3[], sarea[], pch = 16, cex = .8)
+plot(pred3[], sarea[], pch = 16, cex = .8, xlab = "predicted", ylab = "observed", cex.lab = 1.5)
 abline(a=1, b=1, col = "darkred", lwd = 2)
 sum(sarea[])
 sum(pred3[])
@@ -464,4 +475,8 @@ abline(a=1, b=1, col = "darkred", lwd = 2)
 plot(pred3[], sarea[], pch = 16, cex = .8)
 abline(a=1, b=1, col = "darkred", lwd = 2)
 
-
+effEst <- data.frame(cbind(c(samples_mcmc$chain2[,1],samples_mcmc$chain2[,2],samples_mcmc$chain2[,3]),
+c(rep(1,length(samples_mcmc$chain2[,1])), rep(2,length(samples_mcmc$chain2[,1])), 
+  rep(3,length(samples_mcmc$chain2[,1])))))
+boxplot(X1 ~ X2, data = effEst, xlab = "Hunting ground Category", ylab = "Estimated Effort", cex.lab = 1.4,
+        col = c("darkblue", "purple", "yellow"))
