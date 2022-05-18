@@ -59,7 +59,7 @@ ex <- ex[!duplicated(ex$point.ID),]
 spoly$muni <- ex$poly.ID
 
 # Finally, another ugly code to name cell IDs in order inside each polygon
-# To invoque Change of Support we need cells having an ascendent order inside
+# To invoke Change of Support we need cells having an ascendant order inside
 # each polygon, so cell IDs in polygon 1 will be from 1 to 9, cells in polygon
 # 2 will be from 10 to 15, in polygon 3 will be from 16 to 22, etc.
 # (Note that numbers are invented)
@@ -79,256 +79,30 @@ plot(sarea); lines(muni)
 plot(muni_["animals"], pal = terrain.colors(13, rev = T))
 
 ################################################################################
-# Adding effort and hunting yields
+# Including a categorical factor as a proxy of hunting pressure? (type of hunting ground)
+# We will define here hunting pressure as the percentage of animals hunted in a season
+# Following Vajas et al. 2021 (adapted)
+# Hunting Pressure = catchability * effort
 
-muni_$eff <- runif(nrow(muni_),0,0.3)
-muni_$hy <- round(muni_$animals * muni_$eff, 0)
 
-plot(muni_$animals, muni_$eff)
-cor(muni_$animals, muni_$eff)
+muni_$press <- runif(nrow(muni_),0,0.5)
+muni_$hy <- round(muni_$animals * muni_$press, 0)
 
-plot(muni_$animals, muni_$hy)
-cor(muni_$animals, muni_$hy)
-
-plot(sarea)
-lines(muni)
-plot(muni_["animals"])
-plot(muni_[c(2,9)])
-
-constants <- list(ncell = nrow(spoly_),
-                  nmuni = nrow(muni_),
-                  low = muni_$minId,
-                  high = muni_$maxId)
-
-data <- list(animals = muni_$hy,
-             dwat = spoly_$dwat,
-             tree = spoly_$tree)
-
-simuCoS <- nimble::nimbleCode( {
-  # PRIORS
-  
-  b_intercept ~ dnorm(0, 2)
-  b_dwat ~ dnorm(0, 2)
-  b_tree ~ dnorm(0, 2)
-  
-  # LIKELIHOOD
-  for(i in 1:ncell){
-    log(lambda[i]) <- b_intercept + b_dwat*dwat[i] + b_tree*tree[i]
-    n[i] ~ dpois(lambda[i])
-  }
-  
-  # Sampling model. This is the part that changes respect the previous model
-  # Here the counted animals per municipality is distributed following a
-  # Poisson distribution with lambda = lamnda_muni
-  # lambda_muni is simpy the summatory of cell lambda in each municipality
-  for(j in 1:nmuni){
-    log(lambda_muni[j]) <-log(sum(lambda[low[j]:high[j]])) 
-    animals[j] ~ dpois(lambda_muni[j])
-  }
-} )
-
-# Once the model is defined, we should provide a function to get some random
-# initial values for each of our parameters (sampled from an uniform 
-# distribution, for example)
-
-inits <- function() {
-  base::list(n = rep(1, constants$ncell),
-             b_intercept = runif(1, -1, 1),
-             b_dwat = runif(1, -1, 1),
-             b_tree = runif(1, -1, 1)
-  )
-}
-
-# Set values we are interested in
-keepers <- c("lambda", 'b_intercept', "b_dwat", "b_tree")
-
-# Finally we define the settings of our MCMC algorithm
-nc <- 2 # number of chains
-nb <- 1000 # number of initial MCMC iterations to discard
-ni <- nb + 20000 # total number  of iterations
-
-# Now he create the model
-model <- nimble::nimbleModel(code = simuCoS, 
-                             data = data, 
-                             constants = constants, 
-                             inits = inits(),
-                             calculate = FALSE)
-
-# Check if everything is initialized (I understand this)
-model$initializeInfo()
-
-# Compile the model (I'm lost here. In general I understand, but I'm not able
-# to modify any configuration right now)
-c_model <- nimble::compileNimble(model)
-model_conf <- nimble::configureMCMC(model,
-                                    useConjugacy = FALSE)
-model_conf$addMonitors(keepers)
-model_mcmc <- nimble::buildMCMC(model_conf)
-c_model_mcmc <- nimble::compileNimble(model_mcmc, project = model)
-
-# Run the MCMC
-samples <- nimble::runMCMC(c_model_mcmc, 
-                           nburnin = nb, 
-                           niter = ni, 
-                           nchains = nc)
-
-# We can use now the coda package to see MCMC results
-samples_mcmc <- coda::as.mcmc.list(lapply(samples, coda::mcmc))
-
-# Look at traceplots (3 chains) of the three parameters
-par(mfrow=c(1,3))
-coda::traceplot(samples_mcmc[, 1:3])
-# Calculate Rhat convergence diagnostic for the three parameters
-coda::gelman.diag(samples_mcmc[,1:3])
-
-# extract mean for each parameter
-samplesdf <- as.data.frame(rbind(samples_mcmc$chain1,samples_mcmc$chain2))
-mValues <- colMeans(samplesdf)
-# We can inspect the mean of posterior distributions for each parameter
-# Remember that real values were: int=2; dwat=-0.5; tree=0.3
-mValues[1:4]
-
-# Now we can plot lambda predictions and SD for each cell
-pred1 <- sarea
-# Notice that we changed the cellID so we have to use old IDs
-pred1[spoly_$cellId] <- mValues[4:length(mValues)]
-
-par(mfrow = c(1,3))
-plot(sarea, main = "Animal abundance per cell")
-plot(pred1, main = "Predicted abundance per cell")
-plot(pred1[], sarea[], pch = 16, cex = .8)
-abline(a=1, b=1, col = "darkred", lwd = 2)
-sum(sarea[])
-sum(pred1[])
-
-# Including effort in modeling as a constant?
-
-simuEff <- nimble::nimbleCode( {
-  # PRIORS
-  
-  b_intercept ~ dnorm(0, 2)
-  b_dwat ~ dnorm(0, 2)
-  b_tree ~ dnorm(0, 2)
-  effort ~ dunif(0, 0.5) # We think that effort could be somewhere between 0
-                         # and 0.5, so we set the prior...
-  
-  # LIKELIHOOD
-  for(i in 1:ncell){
-    log(lambda[i]) <- b_intercept + b_dwat*dwat[i] + b_tree*tree[i]
-    n[i] ~ dpois(lambda[i])
-  }
-  
-  # Sampling model. This is the part that changes respect the previous model
-  # Here the counted animals per municipality is distributed following a
-  # Poisson distribution with lambda = lambda_muni
-  # lambda_muni is simply the sum of cell lambda in each municipality
-  for(j in 1:nmuni){
-    log(lambda_muni[j]) <-log(sum(lambda[low[j]:high[j]])) 
-    animals[j] ~ dpois(effort * lambda_muni[j]) # effort as a constant?
-  }
-} )
-
-# Once the model is defined, we should provide a function to get some random
-# initial values for each of our parameters (sampled from an uniform 
-# distribution, for example)
-
-inits <- function() {
-  base::list(n = rep(1, constants$ncell),
-             b_intercept = runif(1, -1, 1),
-             b_dwat = runif(1, -1, 1),
-             b_tree = runif(1, -1, 1),
-             effort = runif(1, 0, 0.5)
-  )
-}
-
-# Set values we are interested in
-keepers <- c("lambda", 'b_intercept', "b_dwat", "b_tree", "effort")
-
-# Finally we define the settings of our MCMC algorithm
-nc <- 2 # number of chains
-nb <- 1000 # number of initial MCMC iterations to discard
-ni <- nb + 20000 # total number  of iterations
-
-# Now he create the model
-model <- nimble::nimbleModel(code = simuEff, 
-                             data = data, 
-                             constants = constants, 
-                             inits = inits(),
-                             calculate = FALSE)
-
-# Check if everything is initialized (I understand this)
-model$initializeInfo()
-
-# Compile the model (I'm lost here. In general I understand, but I'm not able
-# to modify any configuration right now)
-c_model <- nimble::compileNimble(model)
-model_conf <- nimble::configureMCMC(model,
-                                    useConjugacy = FALSE)
-model_conf$addMonitors(keepers)
-model_mcmc <- nimble::buildMCMC(model_conf)
-c_model_mcmc <- nimble::compileNimble(model_mcmc, project = model)
-
-# Run the MCMC
-samples <- nimble::runMCMC(c_model_mcmc, 
-                           nburnin = nb, 
-                           niter = ni, 
-                           nchains = nc)
-
-# We can use now the coda package to see MCMC results
-samples_mcmc <- coda::as.mcmc.list(lapply(samples, coda::mcmc))
-
-# Look at traceplots (3 chains) of the three parameters
-par(mfrow=c(1,3))
-coda::traceplot(samples_mcmc[, 1:3])
-# Calculate Rhat convergence diagnostic for the three parameters
-coda::gelman.diag(samples_mcmc[,1:3])
-
-# extract mean for each parameter
-samplesdf <- as.data.frame(rbind(samples_mcmc$chain1,samples_mcmc$chain2))
-mValues <- colMeans(samplesdf)
-# We can inspect the mean of posterior distributions for each parameter
-# Remember that real values were: int=2; dwat=-0.5; tree=0.3
-mValues[1:4]
-
-# Now we can plot lambda predictions and SD for each cell
-pred2 <- sarea
-# Notice that we changed the cellID so we have to use old IDs
-pred2[spoly_$cellId] <- mValues[5:length(mValues)]
-
-par(mfrow = c(1,3))
-plot(sarea, main = "Animal abundance per cell")
-plot(pred2, main = "Predicted abundance per cell")
-plot(pred2[], sarea[], pch = 16, cex = .8)
-abline(a=1, b=1, col = "darkred", lwd = 2)
-sum(sarea[])
-sum(pred2[])
-
-par(mfrow = c(1,2))
-plot(pred1[], sarea[], pch = 16, cex = .8)
-abline(a=1, b=1, col = "darkred", lwd = 2)
-plot(pred2[], sarea[], pch = 16, cex = .8)
-abline(a=1, b=1, col = "darkred", lwd = 2)
-
-# Including a categorical factor as a proxy of effort? (type of hunting ground)
-
-muni_$eff <- runif(nrow(muni_),0,0.5)
-muni_$hy <- round(muni_$animals * muni_$eff, 0)
-
-plot(muni_$animals, muni_$eff, pch = 16, xlab = "ANIMALS", ylab = "HUNTING EFFORT")
-cor(muni_$animals, muni_$eff)
+plot(muni_$animals, muni_$press, pch = 16, xlab = "ANIMALS", ylab = "HUNTING PRESSURE")
+cor(muni_$animals, muni_$press)
 
 plot(muni_$animals, muni_$hy, pch = 16, xlab = "ANIMALS", ylab = "HUNTING YIELD")
 cor(muni_$animals, muni_$hy)
 
-plot(muni_$eff, muni_$hy, pch = 16, xlab = "HUNTING EFFORT", ylab = "HUNTING YIELD")
-cor(muni_$eff, muni_$hy)
+plot(muni_$press, muni_$hy, pch = 16, xlab = "HUNTING PRESSURE", ylab = "HUNTING YIELD")
+cor(muni_$press, muni_$hy)
 
 plot(sarea)
 lines(muni)
 plot(muni_["animals"])
 plot(muni_[c(2,9)])
-plot(muni_["eff"],  pal = heat.colors(10, rev = T), main = "Hunting effort")
-plot(muni_["hy"], pal = terrain.colors(10, rev = T), main = "Hunting yield (animals * effort)")
+plot(muni_["press"],  pal = heat.colors(10, rev = T), main = "Hunting pressure")
+plot(muni_["hy"], pal = terrain.colors(12, rev = T), main = "Hunting yield (animals * pressure)")
 
 library(Hmisc)
 library(fastDummies)
@@ -336,7 +110,7 @@ library(dplyr)
 library(tidyverse)
 
 
-ff <- cut2(muni_$eff, g = 3)
+ff <- cut2(muni_$press, g = 3)
 levels(ff) <- c("1", "2", "3")
 
 dd <- fastDummies::dummy_cols(ff) %>% as_tibble() #%>% 
@@ -373,7 +147,6 @@ simuCat <- nimble::nimbleCode( {
   b_cat1 ~ dunif(0, 0.5)
   b_cat2 ~ dunif(0, 0.5)
   b_cat3 ~ dunif(0, 0.5)
-  #b_eff ~ dunif(0, 0.5)
   
   # LIKELIHOOD
   for(i in 1:ncell){
@@ -403,7 +176,6 @@ inits <- function() {
              b_cat1 = runif(1, 0, 1),
              b_cat2 = runif(1, 0, 1),
              b_cat3 = runif(1, 0, 1)
-             #eff = runif(1,0,0.5)
   )
 }
 
@@ -469,14 +241,9 @@ abline(a=1, b=1, col = "darkred", lwd = 2)
 sum(sarea[])
 sum(pred3[])
 
-par(mfrow = c(1,2))
-plot(pred1[], sarea[], pch = 16, cex = .8)
-abline(a=1, b=1, col = "darkred", lwd = 2)
-plot(pred3[], sarea[], pch = 16, cex = .8)
-abline(a=1, b=1, col = "darkred", lwd = 2)
 
-effEst <- data.frame(cbind(c(samples_mcmc$chain2[,1],samples_mcmc$chain2[,2],samples_mcmc$chain2[,3]),
+pressEst <- data.frame(cbind(c(samples_mcmc$chain2[,1],samples_mcmc$chain2[,2],samples_mcmc$chain2[,3]),
 c(rep(1,length(samples_mcmc$chain2[,1])), rep(2,length(samples_mcmc$chain2[,1])), 
   rep(3,length(samples_mcmc$chain2[,1])))))
-boxplot(X1 ~ X2, data = effEst, xlab = "Hunting ground Category", ylab = "Estimated Effort", cex.lab = 1.4,
+boxplot(X1 ~ X2, data = pressEst, xlab = "Hunting ground Category", ylab = "Estimated Pressure", cex.lab = 1.4,
         col = c("darkblue", "purple", "yellow"))
