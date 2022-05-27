@@ -1,5 +1,4 @@
 # Ugly R script for testing
-
 set.seed(3)
 library(terra)
 library(sf)
@@ -37,11 +36,6 @@ plot(tree, main = "Tree cover")
 plot(lambda, main = "Lambda parameter of the IPPP")
 plot(sarea, main = "Animal abundance per cell")
 
-################################################################################
-
-library(nimble)
-library(nimbleSCR)
-
 # Firstly, we create some municipalities using random points and Voronoi 
 # polygons
 l1 <- randomPoints(sarea, 50)
@@ -78,7 +72,8 @@ muni_ <- spoly_ %>% group_by(muni) %>% dplyr::summarise(animals=sum(animals),
 plot(sarea); lines(muni)
 plot(muni_["animals"], pal = terrain.colors(13, rev = T))
 
-################################################################################
+######################################### HUNTING PRESSURE 1####################
+
 # Including a categorical factor as a proxy of hunting pressure? (type of hunting ground)
 # We will define here hunting pressure as the percentage of animals hunted in a season
 # Following Vajas et al. 2021 (adapted)
@@ -103,6 +98,8 @@ library(fastDummies)
 library(dplyr)
 library(tidyverse)
 
+library(nimble)
+library(nimbleSCR)
 
 ff <- cut2(muni_$press, g = 3)
 levels(ff) <- c("1", "2", "3")
@@ -241,3 +238,39 @@ c(rep(1,length(samples_mcmc$chain2[,1])), rep(2,length(samples_mcmc$chain2[,1]))
   rep(3,length(samples_mcmc$chain2[,1])))))
 boxplot(X1 ~ X2, data = pressEst, xlab = "Hunting ground Category", ylab = "Estimated Pressure", cex.lab = 1.4,
         col = c("darkblue", "purple", "yellow"))
+
+######################################### HUNTING PRESSURE 2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
