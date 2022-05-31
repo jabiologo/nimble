@@ -239,9 +239,180 @@ c(rep(1,length(samples_mcmc$chain2[,1])), rep(2,length(samples_mcmc$chain2[,1]))
 boxplot(X1 ~ X2, data = pressEst, xlab = "Hunting ground Category", ylab = "Estimated Pressure", cex.lab = 1.4,
         col = c("darkblue", "purple", "yellow"))
 
-######################################### HUNTING PRESSURE 2
+######################################### HUNTING PRESSURE 2###################
+# Including a categorical factor as a proxy of hunting pressure? (type of hunting ground)
+# We will define here hunting pressure as the percentage of animals hunted in a season
+# Following Vajas et al. 2021 (adapted)
+# Hunting Pressure = catchability * effort
+
+muni_$press <- runif(nrow(muni_),0,0.5)
+muni_$hy <- round(muni_$animals * muni_$press, 0)
+muni_$area <- st_area(muni_)/1000000
+muni_$hyDen <- muni_$hy/muni_$area
+
+par(mfrow=c(1,3))
+plot(muni_$animals, muni_$press, pch = 16, xlab = "ANIMALS", ylab = "HUNTING PRESSURE")
+plot(muni_$animals, muni_$hy, pch = 16, xlab = "ANIMALS", ylab = "HUNTING YIELD")
+plot(muni_$press, muni_$hy, pch = 16, xlab = "HUNTING PRESSURE", ylab = "HUNTING YIELD")
+dev.off()
+plot(muni_["animals"], pal = terrain.colors(13, rev = T), main = "Animals")
+plot(muni_["press"],  pal = heat.colors(10, rev = T), main = "Hunting pressure")
+plot(muni_["hy"], pal = terrain.colors(8, rev = T), main = "Hunting yield (animals * pressure)")
 
 
+library(Hmisc)
+library(fastDummies)
+library(dplyr)
+library(tidyverse)
+
+library(nimble)
+library(nimbleSCR)
+
+# Let's fit hunting ground categories from hg rather than press
+ff <- cut2(as.numeric(muni_$hyDen), g = 3)
+levels(ff) <- c("1", "2", "3")
+
+dd <- fastDummies::dummy_cols(ff) %>% as_tibble() #%>% 
+#dplyr::select(.data:.data_3) %>% 
+names(dd) <- c("CatT", "Cat1", "Cat2", "Cat3")
+muni_$catT <- as.numeric(as.character(dd$CatT))
+muni_$cat1 <- dd$Cat1
+muni_$cat2 <- dd$Cat2
+muni_$cat3 <- dd$Cat3
+
+plot(muni_["catT"], main = "Hunting ground Category")
+
+constants <- list(ncell = nrow(spoly_),
+                  nmuni = nrow(muni_),
+                  low = muni_$minId,
+                  high = muni_$maxId)
+
+data <- list(animals = muni_$hy,
+             dwat = spoly_$dwat,
+             tree = spoly_$tree,
+             cat1 = muni_$cat1,
+             cat2 = muni_$cat2,
+             cat3 = muni_$cat3)
+
+# 1) Vectorización
+# log(lambda[1:ncell]) <- b_intercept + b_dwat*dwat[1:ncell] + b_tree*tree[1:ncell]
+# dbinom_vector
+# 2) Change parametrization following Olivier advice
+
+dpois_vector <- function(){
+  dbinom_vector(rep(5,10),size = rep(10,10), prob = rep(0.5,10))
+}
+
+
+simuCat <- nimble::nimbleCode( {
+  # PRIORS
+  
+  b_intercept ~ dnorm(0, 2)
+  b_dwat ~ dnorm(0, 2)
+  b_tree ~ dnorm(0, 2)
+  b_cat1 ~ dunif(0, 0.5)
+  b_cat2 ~ dunif(0, 0.5)
+  b_cat3 ~ dunif(0, 0.5)
+  
+  # LIKELIHOOD
+  for(i in 1:ncell){
+    log(lambda[i]) <- b_intercept + b_dwat*dwat[i] + b_tree*tree[i]
+    n[i] ~ dpois(lambda[i])
+  }
+  
+  # Sampling model. This is the part that changes respect the previous model
+  # Here the counted animals per municipality is distributed following a
+  # Poisson distribution with lambda = lambda_muni
+  # lambda_muni is simply the sum of cell lambda in each municipality
+  for(j in 1:nmuni){
+    log(lambda_muni[j]) <- log(sum(lambda[low[j]:high[j]])) 
+    animals[j] ~ dpois((b_cat1*cat1[j]*lambda_muni[j]) + (b_cat2*cat2[j]*lambda_muni[j]) + (b_cat3*cat3[j]*lambda_muni[j]))
+  }
+} )
+
+# Once the model is defined, we should provide a function to get some random
+# initial values for each of our parameters (sampled from an uniform 
+# distribution, for example)
+
+inits <- function() {
+  base::list(n = rep(1, constants$ncell),
+             b_intercept = runif(1, -1, 1),
+             b_dwat = runif(1, -1, 1),
+             b_tree = runif(1, -1, 1),
+             b_cat1 = runif(1, 0, 1),
+             b_cat2 = runif(1, 0, 1),
+             b_cat3 = runif(1, 0, 1)
+  )
+}
+
+# Set values we are interested in
+keepers <- c("lambda", 'b_intercept', "b_dwat", "b_tree", "b_cat1", "b_cat2", "b_cat3")
+
+# Finally we define the settings of our MCMC algorithm
+nc <- 2 # number of chains
+nb <- 1000 # number of initial MCMC iterations to discard
+ni <- nb + 20000 # total number  of iterations
+
+# Now he create the model
+model <- nimble::nimbleModel(code = simuCat, 
+                             data = data, 
+                             constants = constants, 
+                             inits = inits(),
+                             calculate = FALSE)
+
+# Check if everything is initialized (I understand this)
+model$initializeInfo()
+
+# Compile the model (I'm lost here. In general I understand, but I'm not able
+# to modify any configuration right now)
+c_model <- nimble::compileNimble(model)
+model_conf <- nimble::configureMCMC(model,
+                                    useConjugacy = FALSE)
+model_conf$addMonitors(keepers)
+model_mcmc <- nimble::buildMCMC(model_conf)
+c_model_mcmc <- nimble::compileNimble(model_mcmc, project = model)
+
+# Run the MCMC
+samples <- nimble::runMCMC(c_model_mcmc, 
+                           nburnin = nb, 
+                           niter = ni, 
+                           nchains = nc)
+
+# We can use now the coda package to see MCMC results
+samples_mcmc <- coda::as.mcmc.list(lapply(samples, coda::mcmc))
+
+# Look at traceplots (3 chains) of the three parameters
+par(mfrow=c(2,3))
+coda::traceplot(samples_mcmc[, 1:6])
+# Calculate Rhat convergence diagnostic for the three parameters
+coda::gelman.diag(samples_mcmc[,1:6])
+
+# extract mean for each parameter
+samplesdf <- as.data.frame(rbind(samples_mcmc$chain1,samples_mcmc$chain2))
+mValues <- colMeans(samplesdf)
+# We can inspect the mean of posterior distributions for each parameter
+# Remember that real values were: int=2; dwat=-0.5; tree=0.3
+mValues[1:7]
+
+# Now we can plot lambda predictions and SD for each cell
+pred3 <- sarea
+# Notice that we changed the cellID so we have to use old IDs
+pred3[spoly_$cellId] <- mValues[7:length(mValues)]
+
+par(mfrow = c(1,3))
+plot(sarea, main = "Animal abundance per cell")
+plot(pred3, main = "Predicted abundance per cell")
+plot(pred3[], sarea[], pch = 16, cex = .8, xlab = "predicted", ylab = "observed", cex.lab = 1.5)
+abline(a=1, b=1, col = "darkred", lwd = 2)
+sum(sarea[])
+sum(pred3[])
+
+
+pressEst <- data.frame(cbind(c(samples_mcmc$chain2[,1],samples_mcmc$chain2[,2],samples_mcmc$chain2[,3]),
+                             c(rep(1,length(samples_mcmc$chain2[,1])), rep(2,length(samples_mcmc$chain2[,1])), 
+                               rep(3,length(samples_mcmc$chain2[,1])))))
+boxplot(X1 ~ X2, data = pressEst, xlab = "Hunting ground Category", ylab = "Estimated Pressure", cex.lab = 1.4,
+        col = c("darkblue", "purple", "yellow"))
 
 
 
