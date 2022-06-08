@@ -415,33 +415,68 @@ boxplot(X1 ~ X2, data = pressEst, xlab = "Hunting ground Category", ylab = "Esti
         col = c("darkblue", "purple", "yellow"))
 
 
+###################### MVNormal Simulation #####################################
+library(MASS)
+library(matrixcalc)
+library(lqmm)
+# Create a study area
+sarea <- raster(nrows = 4, ncols = 4, xmn = 0, xmx = 4, ymn = 0, ymx = 4)
+# Distance to water point covariate
+dwat <- scale(distanceFromPoints(sarea, c(0.5,0.5)))
+coords <- xyFromCell(dwat,1:16)
+dd <- dist(coords)
+
+Cmat <- function(sigma2, distance, rho){
+  C <- sigma2 * exp(-distance/rho)
+  return(C)
+}
+
+C <- round(Cmat(0.1, dd, 1),3)
+
+MVN <- mvrnorm(n = 1,mu = rep(0,16),Sigma = CCC)
+
+ccc <- dwat
+ccc[] <- MVN
+
+lambda <- dwat
+
+lambda[1:16] <- exp((0.3*dwat[1:16]) + MVN[1:16])
+plot(lambda)
+
+####################
+
+expcov <- nimbleFunction(     
+  run = function(dists = double(2), rho = double(0), sigma = double(0)) {
+    returnType(double(2))
+    n <- dim(dists)[1]
+    result <- matrix(nrow = n, ncol = n, init = FALSE)
+    sigma2 <- sigma*sigma   # calculate once
+    for(i in 1:n)
+      for(j in 1:n)
+        result[i, j] <- sigma2*exp(-dists[i,j]/rho)
+    return(result)
+  })
 
 
 
+expcov <- function(dists, rho, sigma){
+  n <- dim(dists)[1]
+  result <- matrix(nrow = n, ncol = n)
+  sigma2 <- sigma*sigma
+  for(i in 1:n){
+    for(j in 1:n){
+      result[i, j] <- sigma2*exp(-dists[i,j]/rho)
+    }
+  }
+  return(result)
+}
 
 
+cov <- expcov(ddd, 1, 1)
+N <- 4
+mu <- c(1,1,1,1)
+x[1:N] ~ dmnorm(mu[1:N], cov = cov[1:N, 1:N])
 
+dmnorm_chol(mu[1:N], dmnorm_chol = FALSE)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+mvrnorm(n = 1,mu = rep(1,16),Sigma = cov)
