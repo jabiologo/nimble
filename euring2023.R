@@ -20,13 +20,13 @@ constants <- list(ncell = nrow(grid_),
                   low = dcal$minId,
                   high = dcal$maxId)
 
-data <- list(harvest = dcal$JABALI,
-             X1 = grid_$cover,
-             X2 = grid_$climate,
-             W1 = dcal$Axis1,
-             W2 = dcal$CERRAMIENT,
-             W3 = dcal$areaS)#,
-#constraint1 = rep(1,nrow(dcal)))
+data <- list(harvest = dcal$JABALI, # hunting ground level: wild boar harvest
+             X1 = grid_$cover,      # grid cell level: land cover
+             X2 = grid_$climate,    # grid cell level: climate
+             W1 = dcal$Axis1,       # hunting ground level: continuous type
+             W2 = dcal$CERRAMIENT,  # hunting ground level: fenced/not-fenced
+             W3 = dcal$areaS)#,     # hunting ground level: area
+#constraint1 = rep(1,nrow(dcal)))  # using dconstrain()
 
 m1 <- nimbleCode( {
   
@@ -48,7 +48,7 @@ m1 <- nimbleCode( {
     harvest[h] ~ dpois(lambda_hg[h]*(S[h]))
     log(lambda_hg[h]) <- log(sum(lambda[low[h]:high[h]]))
     logit(S[h]) <- a0 + a1*W1[h] + a2*W2[h] + a3*W3[h]
-    #constraint1[h] ~ dconstraint(logit(S[h]) < 0.6)
+    #constraint1[h] ~ dconstraint(logit(S[h]) < 0.6)        # using dconstrain()
   }
 } )
 
