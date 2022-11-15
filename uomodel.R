@@ -48,9 +48,9 @@ report <- nimble::nimbleCode( {
   # PRIORS
   b0 ~ dnorm(0, 10)
   b1 ~ dnorm(0, 10)
-  #h ~ dbeta(1, 1)
+  h ~ dbeta(1, 1)
   #h ~ dbeta(5, 5) 
-  h ~ dbeta(63.9697, 129.8779) # very informative prior LOL
+  #h ~ dbeta(63.9697, 129.8779) # very informative prior LOL
   a1 ~ dnorm(0, 10) 
   
   # LIKELIHOOD
@@ -94,18 +94,18 @@ model_conf <- nimble::configureMCMC(model,
 model_conf$addMonitors(keepers)
 model_mcmc <- nimble::buildMCMC(model_conf)
 c_model_mcmc <- nimble::compileNimble(model_mcmc, project = model)
-samples <- nimble::runMCMC(c_model_mcmc, 
+samples_ou <- nimble::runMCMC(c_model_mcmc, 
                            nburnin = nb, 
                            niter = ni, 
                            nchains = nc)
 
 
 
-samples_mcmc <- coda::as.mcmc.list(lapply(samples, coda::mcmc))
+samples_mcmc_ou <- coda::as.mcmc.list(lapply(samples_ou, coda::mcmc))
 par(mfrow=c(2,2))
-coda::traceplot(samples_mcmc[,201:204])
+coda::traceplot(samples_mcmc_ou[,201:204])
 # Calculate Rhat convergence diagnostic for the three parameters
-coda::gelman.diag(samples_mcmc[,201:204])
+coda::gelman.diag(samples_mcmc_ou[,201:204])
 
 
 ################################################################################
