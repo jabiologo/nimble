@@ -6,14 +6,11 @@ library(ade4)
 library(Hmisc)
 library(RCurl)
 
-x <- getURL("https://raw.github.com/aronlindberg/latent_growth_classes/master/LGC_data.csv")
-y <- read.csv(text = x)
-
-hg_ <- read_sf("/home/javifl/margaritaSalas/ciencia/clmHunting/gis/hgNew.shp")
-hg_$CERRAMIENT <- as.numeric(hg_$CERRAMIENT)
-grid_ <- read_sf("/home/javifl/margaritaSalas/ciencia/clmHunting/gis/grNew.shp")
-hg_$areaS <- scale(hg_$area)[,1]
-#hg_$area2 <- scale(hg_$area*hg_$area)[,1]
+# Load the data
+hg <- getURL("https://raw.githubusercontent.com/jabiologo/nimble/main/data/hgNew.csv")
+gr <- getURL("https://raw.githubusercontent.com/jabiologo/nimble/main/data/grNew.csv")
+hg_ <- read.csv(text = hg)
+grid_ <- read.csv(text = gr)
 
 # Data used for model calibration
 dcal <- slice_sample(hg_, prop = 0.7)
@@ -73,7 +70,6 @@ c_model_mcmc <- compileNimble(model_mcmc, project = model)
 samplesCoS <- runMCMC(c_model_mcmc, nburnin = nb, niter = ni, nchains = nc)
 
 # Trace plots
-#sampCoS <- coda::mcmc(samplesCoS)
 sampCoS <- coda::as.mcmc.list(lapply(samplesCoS, coda::mcmc))
 par(mfrow=c(3,3))
 traceplot(sampCoS)
