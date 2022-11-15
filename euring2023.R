@@ -4,6 +4,10 @@ library(dplyr)
 library(coda)
 library(ade4)
 library(Hmisc)
+library(RCurl)
+
+x <- getURL("https://raw.github.com/aronlindberg/latent_growth_classes/master/LGC_data.csv")
+y <- read.csv(text = x)
 
 hg_ <- read_sf("/home/javifl/margaritaSalas/ciencia/clmHunting/gis/hgNew.shp")
 hg_$CERRAMIENT <- as.numeric(hg_$CERRAMIENT)
