@@ -130,12 +130,93 @@ abline(a=0,b=1,col="black",cex=2) # identity
 
 ################################################################################
 # Uncertainty
-# Some diagnostic plots (posterior probs of )
+# Some diagnostic plots (posterior probs)
 library(plotMCMC)
+library(bayestestR)
+library(plotrix)
 plotAuto(sampCoS)
 plotDens(sampCoS)
 plotQuant(sampCoS)
 
+samp2 <- sample_n(data.frame(sampCoS), 10000)
 
+a0 <- samp2[,1]
+a1 <- samp2[,2]
+a2 <- samp2[,3]
+a3 <- samp2[,4]
+b0 <- samp2[,5]
+b1 <- samp2[,6]
+b2 <- samp2[,7]
 
+# Abundance at grid cell level
+predDens <- data.frame(exp(b0 + b1%o%grid_$cover + b2%o%grid_$climate))
+predDensCI <- sapply(predDens, ci)
+predDensSE <- sapply(predDens, std.error)
+grid_$m1low <- as.numeric(predDensCI[2,])
+grid_$m1high <- as.numeric(predDensCI[3,])
+grid_$m1se <- predDensSE
 
+# Abundance aggregation at hunting ground level
+agLow <- aggregate(x = grid_$m1low, by = list(grid_$Hg), FUN = sum)
+names(agLow)[2] <- "agLow"
+agHigh <- aggregate(x = grid_$m1high, by = list(grid_$Hg), FUN = sum)
+names(agHigh)[2] <- "agHigh"
+hg_ <- left_join(hg_, agLow, by = c("Hg" = "Group.1"))
+hg_ <- left_join(hg_, agHigh, by = c("Hg" = "Group.1"))
+
+# Hunting pressure / catch rate for each hunting ground
+pDens <- data.frame(exp(a0 + a1%o%hg_$Axis1 + a2%o%hg_$CERRAMIENT + a3%o%hg_$areaS) / (1 + exp(a0 + a1%o%hg_$Axis1 + a2%o%hg_$CERRAMIENT + a3%o%hg_$areaS)))
+pDensCI <- sapply(pDens, ci)
+hg_$p1low <- as.numeric(pDensCI[2,])
+hg_$p1high <- as.numeric(pDensCI[3,])
+
+# Hunting yield / harvest prediction at hunting ground level 
+hg_$m1PredLow <- hg_$agLow*hg_$p1low
+hg_$m1PredHigh <- hg_$agHigh*hg_$p1high
+#par(mfrow=c(1,1))
+#hist(hg_$p1, breaks = 50)
+
+# Validation dataset
+dval <- hg_[!(hg_$Hg %in% dcal$Hg),]
+
+s_class<-cut2(dval$m1Pred, g=9) # defining bins (percentiles) on the predicted
+s_mean<-as.matrix(tapply(dval$m1Pred, s_class,mean)) # calculating mean values for predicted
+x_mean<-as.matrix(tapply(dval$JABALI,s_class,mean)) # calculating mean values for observed
+
+s_meanL<-as.matrix(tapply(dval$m1PredLow, s_class,mean)) # calculating mean values for predicted
+s_meanH<-as.matrix(tapply(dval$m1PredHigh, s_class,mean)) # calculating mean values for predicted
+
+dfVal <- data.frame(x_mean, s_mean, s_meanL, s_meanH)
+
+plot(x_mean,s_mean,pch=19, # the calibration plot
+     xlab="Observed hunting bag",
+     ylab="Predicted hunting bag",
+     xlim=c(0,max(s_meanH, x_mean)),ylim=c(0,max(x_mean, s_meanH)),cex=1.2,
+     cex.lab=1.3,cex.axis=1.2)
+abline(a=0,b=1,col="black",cex=2) # identity
+points(x_mean,s_meanL)
+points(x_mean,s_meanH)
+
+# Basic scatter plot
+ggplot(dfVal, aes(x=x_mean, y=s_mean)) + 
+  geom_point(size = 3) +
+  xlim(0,max(s_meanH)) + 
+  ylim(0,max(s_meanH)) +
+  geom_pointrange(aes(ymin = s_meanL, ymax = s_meanH)) + 
+  geom_abline(intercept = 0, slope = 1) +
+  labs(title="", x="Observed harvest", y = "Predicted harvest") +
+  theme(axis.text=element_text(size=14),
+      axis.title=element_text(size=18, margin = margin(t = 0, r = 15, b = 0, l = 0)),
+      axis.title.y = element_text(margin = margin(t = 0, r = 15, b = 0, l = 0)),
+      axis.title.x = element_text(margin = margin(t = 15, r = 0, b = 0, l = 0)),
+      legend.position="none", 
+      plot.title=element_text(hjust=0.5,size=27,face = "bold"),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_rect(fill = "white",
+                                      colour = "black",
+                                      size = 1, linetype = "solid"))
+
+sum(grid_$m1low)
+sum(grid_$m1)
+sum(grid_$m1high)
