@@ -74,8 +74,10 @@ samplesCoS <- runMCMC(c_model_mcmc, nburnin = nb, niter = ni, nchains = nc)
 sampCoS <- coda::as.mcmc.list(lapply(samplesCoS, coda::mcmc))
 par(mfrow=c(3,3))
 traceplot(sampCoS)
+# Calculate Rhat convergence diagnostic
+gelman.diag(sampCoS)
 # Merge chains
-sampCoS <- rbind(sampCoS$chain1, sampCoS$chain2, sampCoS$chain3)
+sampCoS <- mcmc(rbind(sampCoS$chain1, sampCoS$chain2, sampCoS$chain3))
 
 # Store coefficients for prediction (mean)
 a0 <- mean(sampCoS[,1])
@@ -125,4 +127,15 @@ abline(a=0,b=1,col="black",cex=2) # identity
 # Prediction to shapefiles
 #write_sf(grid_, "/home/javifl/margaritaSalas/ciencia/clmHunting/gis/grid_res.shp")
 #write_sf(hg_, "/home/javifl/margaritaSalas/ciencia/clmHunting/gis/hg_res.shp")
+
+################################################################################
+# Uncertainty
+# Some diagnostic plots (posterior probs of )
+library(plotMCMC)
+plotAuto(sampCoS)
+plotDens(sampCoS)
+plotQuant(sampCoS)
+
+
+
 
