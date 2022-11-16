@@ -6,6 +6,7 @@ library(ade4)
 library(Hmisc)
 library(RCurl)
 
+set.seed(1)
 # Load the data
 hg <- getURL("https://raw.githubusercontent.com/jabiologo/nimble/main/data/hgNew.csv")
 gr <- getURL("https://raw.githubusercontent.com/jabiologo/nimble/main/data/grNew.csv")
