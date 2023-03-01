@@ -76,6 +76,7 @@ par(mfrow=c(3,3))
 traceplot(sampCoS)
 # Calculate Rhat convergence diagnostic
 gelman.diag(sampCoS)
+effectiveSize(sampCoS)
 # Merge chains
 sampCoS <- mcmc(rbind(sampCoS$chain1, sampCoS$chain2, sampCoS$chain3))
 
@@ -103,6 +104,9 @@ hg_ <- left_join(hg_, ag, by = c("Hg" = "Group.1") )
 hg_$m1Pred <- hg_$aggHg*hg_$p1
 #par(mfrow=c(1,1))
 #hist(hg_$p1, breaks = 50)
+#abline(v=0.16, col = "red")
+#abline(v=0.69, col = "red")
+#abline(v=0.33, col = "blue")
 
 # Validation dataset
 dval <- hg_[!(hg_$Hg %in% dcal$Hg),]

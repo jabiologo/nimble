@@ -69,8 +69,8 @@ spoly$cellId <- 1:nrow(spoly)
 # This ugly chunk is to assign each cell to a polygon
 spoints <- rasterToPoints(sarea)
 ex <- terra::extract(muni,spoints[,1:2])
-ex <- ex[!duplicated(ex$point.ID),]
-spoly$muni <- ex$poly.ID
+ex <- ex[!duplicated(ex$id.y),]
+spoly$muni <- ex$id
 
 # Finally, another ugly code to name cell IDs in order inside each polygon
 # To invoke Change of Support we need cells having an ascendant order inside
