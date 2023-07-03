@@ -1,0 +1,290 @@
+---
+title: "Addressing non-equilibrium in species distribution modeling"
+author: "Javier Fernández López"
+date: "19/06/2023"
+output:
+  html_document: default
+  pdf_document: default
+---
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Non-equilibrium
+
+Animal distribution is often driven by different environmental predictors such as land cover, temperature, precipitation, etc. When using correlative models to predict species distributions, we benefit from those relationships between species presence and environmental cartographic predictors, to build maps about species distribution according to those predictors. Suitability maps define those areas where the predictor values are similar than those places where the species is actually distributed, creating a potential distribution maps.
+
+However, there are many other factors affecting species distributions: biological interactions, dispersal ability, or human interactions can drastically model the species distribution, see [Peterson 2009](https://www.researchgate.net/publication/29445823_Phylogeography_is_not_enough_The_need_for_multiple_lines_of_evidence) for an extended explanation. This sitiuation is sometimes called "non-equilibrium", in the sens that the "species is not occupying all its potential area". 
+
+## Correlative model issues with non-equilibrium species
+
+Though this theory can be discussed, it's true that when performing species distribution models we recognize areas predicted by our models where the species could biologically exists, but from where they were removed by human pressures or other factors. As an example we can think about the distribution of [wolves in Spain](https://zslpublications.onlinelibrary.wiley.com/doi/10.1111/acv.12814). Thought they were distributed all across the country in XVIII century, current populations are enclosed in half-north Spain after human pressure and hunting. In many cases, when we perform a correlative distribution model with current presence data, predictions will include southern areas where the wolf is currently absent, since the model just recognize the relationship between presences and environmental conditions. If suitable conditions does exist in southern areas, the model will predict wolf in south of Spain.
+
+## Modelling species distributions (equilibrium)
+
+Let's simulate an environmental predictor (temperature) that drives the distribution of our virtual species following the formula:
+
+\begin{equation}
+\tag{Eq 1}\label{eq1}
+y_{i} \sim Bernoulli(\Psi_{i})
+\end{equation}
+
+and $\Psi$ parameter follows:
+
+\begin{equation}
+\tag{Eq 2}\label{eq2}
+logit(\Psi_{i}) = \beta_{0} + \beta_{1} * temperature_{i} 
+\end{equation}
+
+So we just choose some values for coefficients and run the simulation:
+
+*   $\beta_{0} = -1.2$
+*   $\beta_{1} = 2.9$
+
+<br/><br/>
+```{r ch1, cache = T, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center"}
+library(plgp)
+library(mvtnorm)
+library(raster)
+library(spBayes)
+library(spOccupancy)
+set.seed(4)
+
+# https://bookdown.org/rbg/surrogates/chap5.html
+temper <- raster(nrows = 3, ncols = 3, xmn = 0, xmx = 3, ymn = 0, ymx = 3)
+temper[] <- rnorm(9)
+temper <- disaggregate(temper, 10, "bilinear")
+names(temper) <- "temper"
+
+
+psi <- exp(-1.2 + 2.9*temper)/(1+exp(-1.2 + 2.9*temper))
+distr <- psi
+distr[] <- rbinom(900, 1, psi[])
+
+
+par(mfrow = c(1,3))
+plot(temper, main = "temper")
+plot(psi, main = "Psi")
+plot(distr, main = "distribution")
+
+
+```
+<br/><br/>
+
+
+Now we can simulate a sampling situation in which we visit 200 places 4 times to account for imperfect detection (probability to detect the species if it is actually present). Fortunately, our species is not difficult to detect, so let's say detection probability is 0.7 per visit. We'll keep this value constant across space and time (same detectability in all sampling visits).
+
+
+```{r ch2, cache = T, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center"}
+
+n <- 200
+sampID <- sample(1:900, n)
+coords <- xyFromCell(distr, sampID)
+occ.covs <- matrix(temper[sampID])
+colnames(occ.covs) <- "temper"
+y <- matrix(NA, n, 4)
+
+for (j in 1:4){
+  for (i in 1:length(sampID)){
+    y[i,j] <- rbinom(1, extract(distr,sampID[i]), 0.7)
+  }
+}
+```
+<br/><br/>
+Now we can fit a site-occupancy model. We'll use spOccupancy (fast and flexible Bayesian inference).
+
+```{r ch3, cache = T, message=FALSE, fig.height = 7.5, fig.width = 7, fig.align = "center"}
+
+data.list <- list(y = y, 
+                  occ.covs = occ.covs, 
+                  coords = coords)
+
+# Number of batches
+n.batch <- 10
+# Batch length
+batch.length <- 25
+n.iter <- n.batch * batch.length
+# Priors 
+prior.list <- list(beta.normal = list(mean = 0, var = 2.72), 
+                   alpha.normal = list(mean = 0, var = 2.72),
+                   sigma.sq.ig = c(2, 2), 
+                   phi.unif = c(3/1, 3/.1)) 
+# Initial values
+inits.list <- list(alpha = 0, beta = 0,
+                   phi = 3 / .5, 
+                   sigma.sq = 2,
+                   w = rep(0, n), # CHANGED
+                   z = apply(y, 1, max, na.rm = TRUE))
+# Tuning
+tuning.list <- list(phi = 1) 
+
+outEq <- PGOcc(occ.formula = ~ temper, 
+               det.formula = ~ 1, 
+               data = data.list, 
+               inits = inits.list, 
+               n.samples = 5000,  
+               priors = prior.list,
+               n.report = 10, 
+               n.burn = 50, 
+               n.chains = 1,
+               verbose = F)
+summary(outEq)
+# Do prediction. 
+library(stars)
+pred.0 <- cbind(1, temper[]) 
+coords.0 <- as.matrix(xyFromCell(distr, 1:900))
+
+out.sp.pred_outEq <- predict(outEq, pred.0)
+# Produce a species distribution map (posterior predictive means of occupancy)
+
+plot.dat_outEq <- data.frame(x = coords.0[,1], 
+                       y = coords.0[,2], 
+                       mean.psi = apply(out.sp.pred_outEq$psi.0.samples, 2, mean), 
+                       sd.psi = apply(out.sp.pred_outEq$psi.0.samples, 2, sd))
+mPred_outEq <- temper
+mPred_outEq[] <- plot.dat_outEq$mean.psi
+
+par(mfrow = c(2,2))
+plot(temper, main = "Temperature")
+plot(psi, main = "True Psi")
+plot(distr, main = "True distribution\n and sampling points")
+points(xyFromCell(distr,sampID), pch = 16, cex = .4)
+plot(mPred_outEq, main = "Model predictions")
+```
+
+## Modelling species distributions (non-equilibrium)
+
+Let's see what happen if we artificially remove southern presences from the south of our study area (simulating hunting pressure or similar). Note that Psi will be the same (that is, the potential distribution of the species would be the same, since the temperature has not change... however distribution will change according to external pressures).
+
+We will repeat the same sampling scheme and we'll applied the same model.
+
+```{r ch4, cache = T, message=FALSE, fig.height = 7.5, fig.width = 7, fig.align = "center"}
+
+# Removing presences from the south of the study area
+distr[510:900] <- 0
+
+# Sampling again
+y <- matrix(NA, n, 4)
+
+for (j in 1:4){
+  for (i in 1:length(sampID)){
+    y[i,j] <- rbinom(1, extract(distr,sampID[i]), 0.7)
+  }
+}
+
+
+
+data.list <- list(y = y, 
+                  occ.covs = occ.covs, 
+                  coords = coords)
+
+# Number of batches
+n.batch <- 10
+# Batch length
+batch.length <- 25
+n.iter <- n.batch * batch.length
+# Priors 
+prior.list <- list(beta.normal = list(mean = 0, var = 2.72), 
+                   alpha.normal = list(mean = 0, var = 2.72),
+                   sigma.sq.ig = c(2, 2), 
+                   phi.unif = c(3/1, 3/.1)) 
+# Initial values
+inits.list <- list(alpha = 0, beta = 0,
+                   phi = 3 / .5, 
+                   sigma.sq = 2,
+                   w = rep(0, n), # CHANGED
+                   z = apply(y, 1, max, na.rm = TRUE))
+# Tuning
+tuning.list <- list(phi = 1) 
+
+outEq <- PGOcc(occ.formula = ~ temper, 
+               det.formula = ~ 1, 
+               data = data.list, 
+               inits = inits.list, 
+               n.samples = 5000,  
+               priors = prior.list,
+               n.report = 10, 
+               n.burn = 50, 
+               n.chains = 1,
+               verbose = F)
+summary(outEq)
+# Do prediction. 
+library(stars)
+pred.0 <- cbind(1, temper[]) 
+coords.0 <- as.matrix(xyFromCell(distr, 1:900))
+
+out.sp.pred_outEq <- predict(outEq, pred.0)
+# Produce a species distribution map (posterior predictive means of occupancy)
+
+plot.dat_outEq <- data.frame(x = coords.0[,1], 
+                       y = coords.0[,2], 
+                       mean.psi = apply(out.sp.pred_outEq$psi.0.samples, 2, mean), 
+                       sd.psi = apply(out.sp.pred_outEq$psi.0.samples, 2, sd))
+mPred_outEq <- temper
+mPred_outEq[] <- plot.dat_outEq$mean.psi
+
+par(mfrow = c(2,2))
+plot(temper, main = "Temperature")
+plot(psi, main = "True Psi")
+plot(distr, main = "True distribution\n and sampling points")
+points(xyFromCell(distr,sampID), pch = 16, cex = .4)
+plot(mPred_outEq, main = "Model predictions")
+
+```
+<br/><br/>
+As we can see, even removing presences from the south and conducting again the sampling, model predictions detect the positive relationship between the species presence and the temperature. Therefore, our model predicts species distribution also in shouthern areas, where the temperature is suitable, but the species is not present. Remember that we conducted the sampling again, so no presences are including in the model for southern areas. The unique effect of these new "zeros" is to decrease the total average suitability (comparing with the previous model).
+<br/><br/>
+How to deal with this situation? While there are probably many options, one solution could be to recognize a "pure spatial" effect in our species distribution, that is, there are purely spatial processes that we actually don't know that also govern the species distribution. This is actually the same as recognize that there are other variables that we are not including in the model, but that we know that they have a pure spatial origin and therefore they can be modeled by accounting for the spatial location of our sampling sites. There are many ways to do that. Here we will use Gaussian process approach implemented in the [spOccupancy R package](https://www.jeffdoser.com/files/spoccupancy-web/articles/modelfitting).
+
+```{r ch5, cache = T, message=FALSE, fig.height = 7.5, fig.width = 7, fig.align = "center"}
+
+
+
+outNonEq <- spPGOcc(occ.formula = ~ temper, 
+               det.formula = ~ 1, 
+               data = data.list, 
+               inits = inits.list, 
+               n.batch = n.batch, 
+               batch.length = batch.length, 
+               priors = prior.list,
+               cov.model = "exponential", 
+               tuning = tuning.list, 
+               NNGP = FALSE, 
+               n.neighbors = 5, 
+               search.type = 'cb', 
+               n.report = 10, 
+               n.burn = 50, 
+               n.chains = 1)
+summary(outNonEq)
+# Do prediction. 
+library(stars)
+pred.0 <- cbind(1, temper[]) 
+coords.0 <- as.matrix(xyFromCell(distr, 1:900))
+
+out.sp.pred_outNonEq <- predict(outNonEq, pred.0, coords.0, verbose = FALSE)
+# Produce a species distribution map (posterior predictive means of occupancy)
+
+plot.dat_outNonEq <- data.frame(x = coords.0[,1], 
+                       y = coords.0[,2], 
+                       mean.psi = apply(out.sp.pred_outNonEq$psi.0.samples, 2, mean), 
+                       sd.psi = apply(out.sp.pred_outNonEq$psi.0.samples, 2, sd))
+mPred_outNonEq <- temper
+mPred_outNonEq[] <- plot.dat_outNonEq$mean.psi
+
+par(mfrow = c(2,2))
+plot(temper, main = "Temperature")
+plot(psi, main = "True Psi")
+plot(distr, main = "True distribution\n and sampling points")
+points(xyFromCell(distr,sampID), pch = 16, cex = .4)
+plot(mPred_outNonEq, main = "Model predictions")
+
+```
+<br/><br/>
+
+Not bad! :) :)
+
