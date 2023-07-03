@@ -47,7 +47,7 @@ So we just choose some values for coefficients and run the simulation:
 *   $\beta_{1} = 2.9$
 
 <br/><br/>
-```{r ch1, cache = T, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center"}
+```{r ch1, cache = F, message=FALSE, fig.height = 7.5, fig.width = 7, fig.align = "center"}
 library(plgp)
 library(mvtnorm)
 library(raster)
@@ -61,14 +61,19 @@ temper[] <- rnorm(9)
 temper <- disaggregate(temper, 10, "bilinear")
 names(temper) <- "temper"
 
+prey <- raster(nrows = 3, ncols = 3, xmn = 0, xmx = 3, ymn = 0, ymx = 3)
+prey[] <- rnorm(9)
+prey <- disaggregate(prey, 10, "bilinear")
+names(prey) <- "prey"
 
-psi <- exp(-1.2 + 2.9*temper)/(1+exp(-1.2 + 2.9*temper))
+psi <- exp(-1.2 + 2.9*temper + 1.2*prey)/(1+exp(-1.2 + 2.9*temper+ 1.2*prey))
 distr <- psi
 distr[] <- rbinom(900, 1, psi[])
 
 
-par(mfrow = c(1,3))
+par(mfrow = c(2,2))
 plot(temper, main = "temper")
+plot(prey, main = "prey")
 plot(psi, main = "Psi")
 plot(distr, main = "distribution")
 
@@ -80,13 +85,13 @@ plot(distr, main = "distribution")
 Now we can simulate a sampling situation in which we visit 200 places 4 times to account for imperfect detection (probability to detect the species if it is actually present). Fortunately, our species is not difficult to detect, so let's say detection probability is 0.7 per visit. We'll keep this value constant across space and time (same detectability in all sampling visits).
 
 
-```{r ch2, cache = T, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center"}
+```{r ch2, cache = F, message=FALSE, fig.height = 3, fig.width = 8, fig.align = "center"}
 
 n <- 200
 sampID <- sample(1:900, n)
 coords <- xyFromCell(distr, sampID)
-occ.covs <- matrix(temper[sampID])
-colnames(occ.covs) <- "temper"
+occ.covs <- as.matrix(data.frame(temper = temper[sampID], prey = prey[sampID]))
+colnames(occ.covs) <- c("temper","prey")
 y <- matrix(NA, n, 4)
 
 for (j in 1:4){
@@ -98,7 +103,7 @@ for (j in 1:4){
 <br/><br/>
 Now we can fit a site-occupancy model. We'll use spOccupancy (fast and flexible Bayesian inference).
 
-```{r ch3, cache = T, message=FALSE, fig.height = 7.5, fig.width = 7, fig.align = "center"}
+```{r ch3, cache = F, message=FALSE, fig.height = 10.8, fig.width = 7, fig.align = "center"}
 
 data.list <- list(y = y, 
                   occ.covs = occ.covs, 
@@ -123,7 +128,7 @@ inits.list <- list(alpha = 0, beta = 0,
 # Tuning
 tuning.list <- list(phi = 1) 
 
-outEq <- PGOcc(occ.formula = ~ temper, 
+outEq <- PGOcc(occ.formula = ~ temper + prey, 
                det.formula = ~ 1, 
                data = data.list, 
                inits = inits.list, 
@@ -136,7 +141,7 @@ outEq <- PGOcc(occ.formula = ~ temper,
 summary(outEq)
 # Do prediction. 
 library(stars)
-pred.0 <- cbind(1, temper[]) 
+pred.0 <- cbind(1, temper[], prey[]) 
 coords.0 <- as.matrix(xyFromCell(distr, 1:900))
 
 out.sp.pred_outEq <- predict(outEq, pred.0)
@@ -149,8 +154,9 @@ plot.dat_outEq <- data.frame(x = coords.0[,1],
 mPred_outEq <- temper
 mPred_outEq[] <- plot.dat_outEq$mean.psi
 
-par(mfrow = c(2,2))
+par(mfrow = c(3,2))
 plot(temper, main = "Temperature")
+plot(prey, main = "Prey")
 plot(psi, main = "True Psi")
 plot(distr, main = "True distribution\n and sampling points")
 points(xyFromCell(distr,sampID), pch = 16, cex = .4)
@@ -163,7 +169,7 @@ Let's see what happen if we artificially remove southern presences from the sout
 
 We will repeat the same sampling scheme and we'll applied the same model.
 
-```{r ch4, cache = T, message=FALSE, fig.height = 7.5, fig.width = 7, fig.align = "center"}
+```{r ch4, cache = F, message=FALSE, fig.height = 10.8, fig.width = 7, fig.align = "center"}
 
 # Removing presences from the south of the study area
 distr[510:900] <- 0
@@ -202,7 +208,7 @@ inits.list <- list(alpha = 0, beta = 0,
 # Tuning
 tuning.list <- list(phi = 1) 
 
-outEq <- PGOcc(occ.formula = ~ temper, 
+outEq <- PGOcc(occ.formula = ~ temper + prey, 
                det.formula = ~ 1, 
                data = data.list, 
                inits = inits.list, 
@@ -215,7 +221,7 @@ outEq <- PGOcc(occ.formula = ~ temper,
 summary(outEq)
 # Do prediction. 
 library(stars)
-pred.0 <- cbind(1, temper[]) 
+pred.0 <- cbind(1, temper[], prey[]) 
 coords.0 <- as.matrix(xyFromCell(distr, 1:900))
 
 out.sp.pred_outEq <- predict(outEq, pred.0)
@@ -228,8 +234,9 @@ plot.dat_outEq <- data.frame(x = coords.0[,1],
 mPred_outEq <- temper
 mPred_outEq[] <- plot.dat_outEq$mean.psi
 
-par(mfrow = c(2,2))
+par(mfrow = c(3,2))
 plot(temper, main = "Temperature")
+plot(prey, main = "Prey")
 plot(psi, main = "True Psi")
 plot(distr, main = "True distribution\n and sampling points")
 points(xyFromCell(distr,sampID), pch = 16, cex = .4)
@@ -241,11 +248,11 @@ As we can see, even removing presences from the south and conducting again the s
 <br/><br/>
 How to deal with this situation? While there are probably many options, one solution could be to recognize a "pure spatial" effect in our species distribution, that is, there are purely spatial processes that we actually don't know that also govern the species distribution. This is actually the same as recognize that there are other variables that we are not including in the model, but that we know that they have a pure spatial origin and therefore they can be modeled by accounting for the spatial location of our sampling sites. There are many ways to do that. Here we will use Gaussian process approach implemented in the [spOccupancy R package](https://www.jeffdoser.com/files/spoccupancy-web/articles/modelfitting).
 
-```{r ch5, cache = T, message=FALSE, fig.height = 7.5, fig.width = 7, fig.align = "center"}
+```{r ch5, cache = F, message=FALSE, fig.height = 10.8, fig.width = 7, fig.align = "center"}
 
 
 
-outNonEq <- spPGOcc(occ.formula = ~ temper, 
+outNonEq <- spPGOcc(occ.formula = ~ temper + prey, 
                det.formula = ~ 1, 
                data = data.list, 
                inits = inits.list, 
@@ -263,7 +270,7 @@ outNonEq <- spPGOcc(occ.formula = ~ temper,
 summary(outNonEq)
 # Do prediction. 
 library(stars)
-pred.0 <- cbind(1, temper[]) 
+pred.0 <- cbind(1, temper[], prey[]) 
 coords.0 <- as.matrix(xyFromCell(distr, 1:900))
 
 out.sp.pred_outNonEq <- predict(outNonEq, pred.0, coords.0, verbose = FALSE)
@@ -276,8 +283,9 @@ plot.dat_outNonEq <- data.frame(x = coords.0[,1],
 mPred_outNonEq <- temper
 mPred_outNonEq[] <- plot.dat_outNonEq$mean.psi
 
-par(mfrow = c(2,2))
+par(mfrow = c(3,2))
 plot(temper, main = "Temperature")
+plot(prey, main = "Prey")
 plot(psi, main = "True Psi")
 plot(distr, main = "True distribution\n and sampling points")
 points(xyFromCell(distr,sampID), pch = 16, cex = .4)
@@ -288,3 +296,37 @@ plot(mPred_outNonEq, main = "Model predictions")
 
 Not bad! :) :)
 
+```{r ch6, cache = F, eval = F, message=FALSE, fig.height = 10.8, fig.width = 7, fig.align = "center"}
+# Some correlation functions for the multivariate random normal:
+gauss <- function(phi, d){
+  return(exp(-(phi*d)^2))
+}
+plot(seq(0,5,0.1), gauss(1,seq(0,5,0.1)), ty = "l", lwd = 3, col = "darkred",
+     ylab = "correlation", xlab = "distance")
+
+expo <- function(phi, d){
+  return(exp(-(phi*d)))
+}
+lines(seq(0,5,0.1), expo(1,seq(0,5,0.1)), lwd = 3, col = "darkblue")
+
+spher <- function(phi, d){
+  r <- rep(NA, length(d))
+  for(i in 1:length(d)){
+    if(d[i]<1/phi){
+      r[i] <- 1-(1.5*phi*d[i]) + (0.5*(phi*d[i])^3)
+    }else{r[i] <-  0}
+  }
+  return(r)
+}
+lines(seq(0,5,0.1), spher(1,seq(0,5,0.1)), lwd = 3, col = "darkgreen")
+
+mater <- function(phi, d, v){
+  return(((1/((2^(v-1))*gamma(v)))*(phi*d)^v)*besselK(x = (phi*d), nu = v))
+}
+lines(seq(0,5,0.1), mater(1,seq(0,5,0.1),1), lwd = 3, col = "gold2")
+legend("topright", legend=c("Gaussian", "Exponential","Spherical", "Matern"),
+       col=c("darkred", "darkblue", "darkgreen", "gold2"),lty = 1,lwd = 2,  cex=1.2)
+
+
+
+```
