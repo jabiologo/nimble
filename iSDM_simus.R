@@ -7,52 +7,25 @@ library(rgeos)
 
 
 sarea <- raster(nrows = 100, ncols = 100, xmn = 0, xmx = 100, ymn = 0, ymx = 100)
-# Distance to water point covariate
 dwat <- scale(distanceFromPoints(sarea, c(30,30)))
-# Tree cover covariate
 tree <- raster(nrows = 10, ncols = 10, xmn = 0, xmx = 100, ymn = 0, ymx = 100)
 tree[] <- runif(100, 1,10)
 tree <- scale(disaggregate(tree,10, "bilinear"))
 
-# Tree cover covariate
-autoc <- raster(nrows = 10, ncols = 10, xmn = 0, xmx = 100, ymn = 0, ymx = 100)
-autoc[] <- runif(100, 1,10)
-autoc <- scale(disaggregate(autoc,10, "bilinear"))
+lambda <- exp(2 -0.5*(dwat) + 0.3*(tree))
 
-# Lambda parameter for the Poisson distribution of the abundance will be 
-# function from "distance to water point" and "tree cover" with the following
-# coefficients
-beta0 <- 2
-beta1 <- -0.5
-beta2 <- 0.3
-beta3 <- 0.4
-lambda <- exp(beta0 + beta1*(dwat) + beta2*(tree))# + beta3*(autoc))
-
-# Now we can fill each cell of our study area with a random number from a 
-# Poisson distribution with a different lambda at each site/cell (IPPP)
 for (i in 1:ncell(sarea)){
   sarea[i] <- rpois(1, lambda[i])
 }
 
-# Plot the different variables and the study area
-par(mfrow = c(2,2))
-plot(dwat, main = "Distance to the water point")
-plot(tree, main = "Tree cover")
-plot(autoc, main = "Spatial noise")
-plot(lambda, main = "Lambda parameter of the IPPP")
-plot(sarea, main = "Animal abundance per cell")
-
-# Hunting ground simulation. Firstly, we create some municipalities using 
-# random points and Voronoi polygons
+# Hg
 l1 <- randomPoints(sarea, 150)
 muni <- crop(voronoi(l1, ext = extent(sarea)),sarea)
 
-# Here we transform our raster in polygons to work with dataframes
 spoly <- rasterToPolygons(sarea)
 names(spoly) <- "animals"
 spoly$cellId <- 1:nrow(spoly)
 
-# This ugly chunk is to assign each cell to a polygon
 spoints <- rasterToPoints(sarea)
 ex <- terra::extract(muni,spoints[,1:2])
 ex <- ex[!duplicated(ex$id.y),]
@@ -70,21 +43,17 @@ muni_ <- spoly_ %>% group_by(muni) %>% dplyr::summarise(animals=sum(animals),
 
 plot(muni_["animals"])
 muni_$pressCov <- runif(nrow(muni_),-2,2)
-muni_$press <- plogis(-0.5 + 0.3*muni_$pressCov)    #rnorm(nrow(muni_),0.35,0.1)
+muni_$press <- plogis(-0.5 + 0.3*muni_$pressCov)    
 muni_$hy <- round(muni_$animals * muni_$press, 0)
-
-plot(muni_["animals"])
-plot(muni_["press"])
-plot(muni_["hy"])
 
 muni_$effCov1 <- muni_$pressCov + rnorm(n= length(muni_$press), mean = 0, sd = 2)
 muni_$effCov2 <- muni_$pressCov + rnorm(n= length(muni_$press), mean = 0, sd = 1)
 cor(muni_$pressCov, muni_$effCov1) # ~ 0.5
 cor(muni_$pressCov, muni_$effCov2) # ~ 0.7
 
-# For some municipalities we'll have a kind of good measure of animal abundance
+# For some municipalities we'll have a kind of good measure of animal abundance (distance sampling)
 set.seed(2)
-nSamp <- 20
+nSamp <- 30
 muni_sampled <- muni_ %>% sample_n(nSamp)
 # Adding some noise
 muni_sampled$abuSamp <- muni_sampled$animals + rnorm(nrow(muni_sampled),0,250)
@@ -97,15 +66,17 @@ cor(muni_sampled$animals, muni_sampled$abuSamp) # ~ 0.85
 # log(abundance) = beta0L + beta1L*log(letrinas/km)
 # Approximated values from Cabezas and Virgos
 #letkm <- runif(20,1,100)
+# c0 = -7.5
+# c1 = 2.2
 #abun <- exp(-7.5 + (2.2*log(letkm*2)))
 #plot(abun, letkm, ylab = "let/2 km")
-# From abundance to latrines
+#From abundance to latrines
 #exp((7.5+log(abun))/2.2)/2
 
 # Selecting cells for latrine simulation
-latSamp <- data.frame(ID = sample(1:ncell(sarea),100), latC = NA)
+latSamp <- data.frame(ID = sample(1:ncell(sarea),1000), latC = NA)
 # Adding some noise
-latSamp$latC <- (exp((7.5+log(extract(sarea,latSamp$ID)))/2.2)/2) +
+latSamp$latC <- (exp((7.5+log(sarea[latSamp$ID]))/2.2)/2) +
   rnorm(nrow(latSamp),0,4)
 latSamp$latC[latSamp$latC < 0] <- 0
 
@@ -161,14 +132,16 @@ mOc <- nimbleCode( {
     log(lambda_hg[h]) <- log(sum(lambda[hgLow[h]:hgHigh[h]]))
     logit(S[h]) <- a0 + a1*eff[h]
   }
-  # # Obs process for distance sampling
+  # Obs process for distance sampling
   for(j in 1:nds){
-     log(ds[j]) <- log(sum(lambda[dsLow[j]:dsHigh[j]]))
+     log(ds[j]) ~ dnorm(mean=muDs[j], sd=250)
+     muDs[j] <- log(sum(lambda[dsLow[j]:dsHigh[j]]))
   }
   # Obs process for latrines
-    for(l in 1:nlt){
-      letri[l] <- (exp((c0+log(lambda[latID[l]]))/c1)/2)
-    }
+     for(l in 1:nlt){
+       letri[l] ~ dnorm(mean=muLetri[l], sd=4)
+       muLetri[l] <- exp((c0+log(lambda[latID[l]]))/c1)/2
+     }
 } )
 
 keepers <- c("b0", "b1", "b2", "a0", "a1", "c0", "c1")
@@ -177,16 +150,16 @@ nc <- 1
 nb <- 10000
 ni <- nb + 50000
 
-inits <- function() {
-  base::list(N = rep(1, constantsOc$ncell),
-             lambda = rep(1, constantsOc$ncell),
-             b0 = runif(1, -1, 1),
-             b1 = runif(1, -1, 1),
-             b2 = runif(1, -1, 1),
-             a0 = runif(1, -1, 1),
-             a1 = runif(1, -1, 1)
-  )
-}
+#inits <- function() {
+#   base::list(N = rep(1, constantsOc$ncell),
+#              lambda = rep(1, constantsOc$ncell),
+#              b0 = runif(1, -1, 1),
+#              b1 = runif(1, -1, 1),
+#              b2 = runif(1, -1, 1),
+#              a0 = runif(1, -1, 1),
+#              a1 = runif(1, -1, 1)
+#   )
+# }
 
 modelOc <- nimbleModel(code = mOc, data = dataOc, constants = constantsOc, calculate = FALSE)
 c_modelOc <- compileNimble(modelOc)
