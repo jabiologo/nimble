@@ -71,7 +71,7 @@ m5 <- nimbleCode( {
   b0 ~ dnorm(0, 2)
   b1 ~ dnorm(0, 2) 
   b2 ~ dnorm(0, 2)
-  c0 ~ dunif(0, 10) # light informative priors (we know the slope should be >0)
+  c0 ~ dnorm(0, 10) 
   c1 ~ dunif(0, 10) # light informative priors (we know the slope should be >0)
   a0 ~ dnorm(0, 2)
   a1 ~ dnorm(0, 2)
