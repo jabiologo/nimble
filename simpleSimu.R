@@ -1,17 +1,20 @@
+# Preliminary not-spatial simple simulation for data integration
 library(nimble)
 library(coda)
 
+################################################################################
+# Latent process (abundance)
 x1 <- runif(1000, -1,1)
 x2 <- runif(1000, -1,1)
 lam <- exp(2 -0.5*x1 + 0.3*x2)
 N <- rpois(1000, lam)
 
 ################################################################################
-# Dataset 1
-
+# Dataset 1: Distance-sampling: abundances at cell level
 samp1 <- round(runif(100,1,1000),0)
 y1 <- N[samp1] + rnorm(length(samp1), 0, 2)
 
+# Model for distance-sampling only
 constants <- list( ncell = length(N),
                     nsamp1 = length(samp1),
                     sampID1 = samp1)
@@ -31,7 +34,7 @@ m1 <- nimbleCode( {
     log(lambda[i]) <- b0 + b1*x1[i] + b2*x2[i]
   }
   for(j in 1:nsamp1){
-    y1[j] ~ dnorm(mean=lambda[sampID1[j]], sd=2)
+    y1[j] ~ dnorm(mean=lambda[sampID1[j]], sd=2) # try log(y1) in real cases
   }
 } )
 
@@ -51,29 +54,14 @@ samples <- runMCMC(c_model_mcmc, nburnin = nb, niter = ni, nchains = nc)
 
 # Trace plots
 samp <- coda::mcmc(samples)
-#sampOc <- coda::as.mcmc.list(lapply(samplesOc, coda::mcmc))
 par(mfrow=c(3,3))
 traceplot(samp)
 
 
 ################################################################################
-# Dataset 2
-
-# Include sd maybe doesn't make sense... it's just an error that we can obtain from
-# the data like in Distance sampling?
-# Initial values https://oliviergimenez.github.io/nimble-workshop/#114
-# Does't converge when including c0 and c1 and sd is fixed
-# It kind of improves if we include informative priors (not really)
-# If we fix c1 or c0, does converge but with poor fit
-# It makes sense the model fail... Actually we are asking many things from a poor
-# informative dataset. We are trying to obtain information about 2 different process:
-# 1) How does the letrines relates to abundance?
-# 2) Hoe does the abundance relates to predictor covariates?
-# Only data about latrine have not enough info to describe those relations using this model
-# Maybe we could relate latrines directly with predictor covariates...?
-
-
+# Dataset 2: latrine counts at level cell
 samp2 <- round(runif(500,1,1000),0)
+# Following Cabezas-Díaz & Virgós (2023) https://doi.org/10.1016/j.ecolind.2022.109684
 y2 <- exp((7.5+log(N[samp2]))/2.2)/2 + rnorm(length(samp2), 0, 5)
 
 constants <- list( ncell = length(N),
@@ -90,8 +78,8 @@ m2 <- nimbleCode( {
   b2 ~ dnorm(0, 10)
   #c0 ~ dnorm(0, 10)
   #c1 ~ dnorm(0, 10)
-  c0 ~ dnorm(7.5, 1)
-  c1 ~ dnorm(2.2, 1)
+  c0 ~ dunif(0, 10)
+  c1 ~ dunif(0, 10)
   
   # LIKELIHOOD
   for(i in 1:ncell){
@@ -99,16 +87,16 @@ m2 <- nimbleCode( {
     log(lambda[i]) <- b0 + b1*x1[i] + b2*x2[i]
   }
   for(j in 1:nsamp2){
-    y2[j] ~ dnorm(mean=exp((c0+log(lambda[sampID2[j]]))/c1)/2, sd=5)
-    #y2[j] ~ dpois(log(exp((c0+log(lambda[sampID2[j]]))/c1)/2))
+    y2[j] ~ dnorm(mean=y2_1km[j]/2, sd=5)
+    log(y2_1km[j]) <- c0+log(lambda[sampID2[j]])/c1
   }
 } )
 
 keepers <- c("b0", "b1", "b2", "c0", "c1")
 
 nc <- 1
-nb <- 100000
-ni <- nb + 500000
+nb <- 10000
+ni <- nb + 50000
 
 model <- nimbleModel(code = m2, data = data, constants = constants, calculate = FALSE)
 c_model <- compileNimble(model)
@@ -120,14 +108,13 @@ samples <- runMCMC(c_model_mcmc, nburnin = nb, niter = ni, nchains = nc)
 
 # Trace plots
 samp <- coda::mcmc(samples)
-#sampOc <- coda::as.mcmc.list(lapply(samplesOc, coda::mcmc))
 par(mfrow=c(3,3))
 traceplot(samp)
 
 
 ################################################################################
 # Integrated model
-# warning: logProb of data strongly depends on initial values
+# strongly depends on initial values
 # Initial values https://oliviergimenez.github.io/nimble-workshop/#114
 # It works very good if we fix c0 or c1, but doesn't converge if we estimate both
 
@@ -146,8 +133,8 @@ m3 <- nimbleCode( {
   b0 ~ dnorm(0, 10)
   b1 ~ dnorm(0, 10) 
   b2 ~ dnorm(0, 10)
-  c0 ~ dnorm(0, 10)
-  c1 ~ dnorm(0, 10)
+  c0 ~ dunif(0, 10)
+  c1 ~ dunif(0, 10)
   
   # LIKELIHOOD
   for(i in 1:ncell){
@@ -158,15 +145,16 @@ m3 <- nimbleCode( {
     y1[j] ~ dnorm(mean=lambda[sampID1[j]], sd=2)
   }
   for(k in 1:nsamp2){
-    y2[k] ~ dnorm(mean=exp((c0+log(lambda[sampID2[k]]))/c1)/2, sd=5)
+    y2[k] ~ dnorm(mean=y2_1km[k]/2, sd=5)
+    log(y2_1km[k]) <- c0+log(lambda[sampID2[k]])/c1
   }
 } )
 
 keepers <- c("b0", "b1", "b2", "c0", "c1")
 
 nc <- 1
-nb <- 50000
-ni <- nb + 100000
+nb <- 10000
+ni <- nb + 50000
 
 model <- nimbleModel(code = m3, data = data, constants = constants, calculate = FALSE)
 c_model <- compileNimble(model)
@@ -272,8 +260,8 @@ m5 <- nimbleCode( {
   b0 ~ dnorm(0, 2)
   b1 ~ dnorm(0, 2) 
   b2 ~ dnorm(0, 2)
-  c0 ~ dnorm(7.5, 1)
-  c1 ~ dnorm(2.2, 1)
+  c0 ~ dunif(0, 10)
+  c1 ~ dunif(0, 10)
   a0 ~ dnorm(0, 2)
   a1 ~ dnorm(0, 2)
   
@@ -286,7 +274,8 @@ m5 <- nimbleCode( {
     y1[j] ~ dnorm(mean=lambda[sampID1[j]], sd=2)
   }
   for(k in 1:nsamp2){
-    y2[k] ~ dnorm(mean=exp((c0+log(lambda[sampID2[k]]))/c1)/2, sd=5)
+    y2[k] ~ dnorm(mean=y2_1km[k]/2, sd=5)
+    log(y2_1km[k]) <- c0+log(lambda[sampID2[k]])/c1
   }
   for(l in 1:nsamp3){
     y3[l] ~ dpois(lambdaHg[l]*S[l])
@@ -297,7 +286,7 @@ m5 <- nimbleCode( {
 
 keepers <- c("b0", "b1", "b2", "c0", "c1", "a0", "a1")
 
-nc <- 1
+nc <- 3
 nb <- 100000
 ni <- nb + 1000000
 
@@ -310,10 +299,38 @@ c_model_mcmc <- compileNimble(model_mcmc, project = model)
 samples <- runMCMC(c_model_mcmc, nburnin = nb, niter = ni, nchains = nc)
 
 # Trace plots
-samp <- coda::mcmc(samples)
-#sampOc <- coda::as.mcmc.list(lapply(samplesOc, coda::mcmc))
+#samp <- coda::mcmc(samples)
+samp <- coda::as.mcmc.list(lapply(samples, coda::mcmc))
 par(mfrow=c(3,3))
 traceplot(samp)
+
+################################################################################
+# Model evaluation
+sampTot <- rbind(samp$chain1, samp$chain2, samp$chain3)
+# Store coefficients for prediction (mean)
+a0 <- mean(sampTot[,1])
+a1 <- mean(sampTot[,2])
+b0 <- mean(sampTot[,3])
+b1 <- mean(sampTot[,4])
+b2 <- mean(sampTot[,5])
+c0 <- mean(sampTot[,6])
+c1 <- mean(sampTot[,7])
+
+# N (abundance)
+predN <- exp(b0 + b1*x1 + b2*x2)
+plot(predN, N, xlim = c(0,20), ylim = c(0,20))
+abline(a=0,b=1)
+# Distance-sampling
+plot(predN[samp1],y1, xlim = c(0,20), ylim = c(0,20))
+abline(a=0,b=1)
+# Hunting yield
+predNhg <- data.frame(predN=predN, hgID = rep(1:50, each = 20))
+samp3pred <- aggregate(predNhg$predN, by = list(predNhg$hgID), FUN = sum)
+plot(samp3pred$x ,samp3$x, xlim = c(110,190), ylim = c(110,190))
+abline(a=0,b=1)
+# Latrines
+plot(predN[samp2],y2, xlim = c(0,20), ylim = c(0,70))
+abline(a=0,b=1)
 
 ################################################################################
 

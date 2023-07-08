@@ -85,7 +85,7 @@ dev.off()
 plot(sarea)
 lines(muni_, lwd = 0.5)
 lines(muni_sampled, lwd = 3, col = "darkblue")
-points(xyFromCell(sarea,latSamp$ID), pch = 18)
+points(xyFromCell(sarea,latSamp$ID), pch = 18, cex = 0.5)
 
 ################################################################################
 library(nimble)

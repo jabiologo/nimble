@@ -295,8 +295,65 @@ plot(mPred_outNonEq, main = "Model predictions")
 <br/><br/>
 
 Not bad! :) :)
+See now what happen if we just use the spatial process without environmental covariate (Aurelien idea).
 
-```{r ch6, cache = F, eval = F, message=FALSE, fig.height = 10.8, fig.width = 7, fig.align = "center"}
+```{r ch6, cache = F, message=FALSE, fig.height = 10.8, fig.width = 7, fig.align = "center"}
+
+
+
+outNonEq <- spPGOcc(occ.formula = ~ 1, 
+               det.formula = ~ 1, 
+               data = data.list, 
+               inits = inits.list, 
+               n.batch = n.batch, 
+               batch.length = batch.length, 
+               priors = prior.list,
+               cov.model = "exponential", 
+               tuning = tuning.list, 
+               NNGP = FALSE, 
+               n.neighbors = 5, 
+               search.type = 'cb', 
+               n.report = 10, 
+               n.burn = 50, 
+               n.chains = 1)
+summary(outNonEq)
+# Do prediction. 
+library(stars)
+pred.0 <- matrix(rep(1, ncell(temper)),ncell(temper),1) 
+coords.0 <- as.matrix(xyFromCell(distr, 1:900))
+
+out.sp.pred_outNonEq <- predict(outNonEq, pred.0, coords.0, verbose = FALSE)
+# Produce a species distribution map (posterior predictive means of occupancy)
+
+plot.dat_outNonEq <- data.frame(x = coords.0[,1], 
+                       y = coords.0[,2], 
+                       mean.psi = apply(out.sp.pred_outNonEq$psi.0.samples, 2, mean), 
+                       sd.psi = apply(out.sp.pred_outNonEq$psi.0.samples, 2, sd))
+mPred_outNonEq <- temper
+mPred_outNonEq[] <- plot.dat_outNonEq$mean.psi
+
+par(mfrow = c(3,2))
+plot(temper, main = "Temperature")
+plot(prey, main = "Prey")
+plot(psi, main = "True Psi")
+plot(distr, main = "True distribution\n and sampling points")
+points(xyFromCell(distr,sampID), pch = 16, cex = .4)
+plot(mPred_outNonEq, main = "Model predictions")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r chLast, cache = F, eval = F, message=FALSE, fig.height = 10.8, fig.width = 7, fig.align = "center"}
 # Some correlation functions for the multivariate random normal:
 gauss <- function(phi, d){
   return(exp(-(phi*d)^2))
