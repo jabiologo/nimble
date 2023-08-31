@@ -1,13 +1,13 @@
 # Preliminary not-spatial simple simulation for data integration
 library(nimble)
 library(coda)
-
+set.seed(1)
 ################################################################################
 # Latent process (abundance). Two environmental predictor covariates (x1 and x2)
 # b0 = 2; b1 = -0.5; b2 = 0.3
 x1 <- runif(1000, -1,1)
 x2 <- runif(1000, -1,1)
-lam <- exp(2 -0.5*x1 + 0.3*x2)
+lam <- exp(2 - 0.5 * x1 + 0.3 * x2)
 N <- rpois(1000, lam)
 
 ################################################################################
@@ -18,8 +18,10 @@ y1 <- N[samp1] + rnorm(length(samp1), 0, 2)
 # Dataset 2: latrine counts at level cell
 samp2 <- round(runif(500,1,1000),0)
 # Following Cabezas-Díaz & Virgós (2023) https://doi.org/10.1016/j.ecolind.2022.109684
-# c0 = 7.5; c1 = 2
-y2 <- exp((7.5+log(N[samp2]))/2.2)/2 + rnorm(length(samp2), 0, 5)
+# c0 = 7.5; c1 = 2.2
+log.y2 <- -7.5 + 2.2 * log(N[samp2] / 2) + rnorm(length(samp2), 0, 3)
+y2 <- exp(log.y2)
+#y2
 
 # Dataset 3: Harvest data at hunting state level following an effort covariate
 # Harvest = sum(abundance_cell) * thinning_parameter (thinned Poisson point model)
@@ -60,7 +62,7 @@ constants <- list( ncell = length(N),
                    samp3fin = samp3$fin)
 
 data <- list(y1 = y1,
-             y2 = y2,
+             y2 = log(y2), # modif OG
              y3 = samp3$y3,
              x1 = x1,
              x2 = x2,
@@ -71,8 +73,8 @@ m5 <- nimbleCode( {
   b0 ~ dnorm(0, 2)
   b1 ~ dnorm(0, 2) 
   b2 ~ dnorm(0, 2)
-  c0 ~ dnorm(0, 10) 
-  c1 ~ dunif(0, 10) # light informative priors (we know the slope should be >0)
+  c0 ~ dnorm(0, 2) 
+  c1 ~ dlnorm(0, 1) # modif OG
   a0 ~ dnorm(0, 2)
   a1 ~ dnorm(0, 2)
   
@@ -85,21 +87,21 @@ m5 <- nimbleCode( {
     y1[j] ~ dnorm(mean=lambda[sampID1[j]], sd=2)
   }
   for(k in 1:nsamp2){
-    y2[k] ~ dnorm(mean=y2_1km[k]/2, sd=5) # I didn't know how to remove exp with this /2 so I divided it in two lines
-    log(y2_1km[k]) <- c0+log(lambda[sampID2[k]])/c1
+    y2[k] ~ dnorm(mean = y2_1km[k], sd = 1.5) # modif OG; this value affects posterior inference on c0/c1 A LOOOOOOT
+    y2_1km[k] <- c0 + c1 * log(lambda[sampID2[k]]/2) # modif OG
   }
   for(l in 1:nsamp3){
     y3[l] ~ dpois(lambdaHg[l]*S[l])
     lambdaHg[l] <- sum(lambda[samp3ini[l]:samp3fin[l]])
-    logit(S[l]) <- a0 + a1*eff[l]
+    logit(S[l]) <- a0 + a1 * eff[l]
   }
 } )
 
 keepers <- c("b0", "b1", "b2", "c0", "c1", "a0", "a1")
 
 nc <- 1 # tested with 3
-nb <- 10000 # tested with 100000
-ni <- nb + 100000 # tested with 1000000
+nb <- 1000 # tested with 100000
+ni <- nb + 10000 # tested with 1000000
 
 model <- nimbleModel(code = m5, data = data, constants = constants, calculate = FALSE)
 c_model <- compileNimble(model)
