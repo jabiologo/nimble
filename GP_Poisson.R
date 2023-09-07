@@ -151,8 +151,9 @@ conf$addMonitors('s')
 conf$removeSamplers('s[1:n]')
 # Changing a tunable parameter in the adaptation of RW_block makes a big difference.
 # adaptFactorExponent. Exponent controling the rate of decay of the scale 
-# adaptation factor. See Shaby and Wells, 2011, for details. (default = 0.8) 
-conf$addSampler('s[1:n]', 'RW_block', control = list(adaptFactorExponent = 0.25))
+# adaptation factor. See Shaby and Wells, 2011, for details. (default = 0.8)
+# IT'S TOO SLOW. ALSO PROBLEMS STORING s()
+# conf$addSampler('s[1:n]', 'RW_block', control = list(adaptFactorExponent = 0.25))
 
 MCMC <- buildMCMC(conf)
 cMCMC <- compileNimble(MCMC, project = cModel)
