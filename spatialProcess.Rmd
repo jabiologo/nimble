@@ -384,6 +384,23 @@ lines(seq(0,5,0.1), mater(1,seq(0,5,0.1),1), lwd = 3, col = "gold2")
 legend("topright", legend=c("Gaussian", "Exponential","Spherical", "Matern"),
        col=c("darkred", "darkblue", "darkgreen", "gold2"),lty = 1,lwd = 2,  cex=1.2)
 
+expo2 <- function(sig2, phi, d){
+  return(sig2 * exp(-(phi*d)))
+}
+
+plot(seq(0,10,0.1), expo2(1, 0.1,seq(0,10,0.1)), ty = "l", lwd = 2, col = "darkred",
+     ylab = "correlation", xlab = "distance", ylim = c(0,2.1) , xlim = c(0,10))
+
+
+lines(seq(0,10,0.1), expo2(1, 0.5,seq(0,10,0.1)), lwd = 2, col = "darkred")
+lines(seq(0,10,0.1), expo2(1, 1,seq(0,10,0.1)), lwd = 2, col = "darkred")
+
+lines(seq(0,10,0.1), expo2(1, 2,seq(0,10,0.1)), lwd = 2, col = "darkred")
+
+lines(seq(0,10,0.1), expo2(2, 0.1,seq(0,10,0.1)), lwd = 2, col = "darkblue", lty = 2)
+lines(seq(0,10,0.1), expo2(2, 0.5,seq(0,10,0.1)), lwd = 2, col = "darkblue", lty = 2)
+lines(seq(0,10,0.1), expo2(2, 1,seq(0,10,0.1)), lwd = 2, col = "darkblue", lty = 2)
+lines(seq(0,10,0.1), expo2(2, 2,seq(0,10,0.1)), lwd = 2, col = "darkblue", lty = 2)
 
 
 ```

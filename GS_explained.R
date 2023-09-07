@@ -20,7 +20,7 @@ X <- expand.grid(x, x)
 
 # Setting sig2 and phi parameters. With this parameters we'll build the spatial 
 # covariance matrix Sigma, following an exponential model (others are allowed)
-sig2 <- 1 # This is the variance, value in the matrix diagonal
+sig2 <- 2 # This is the variance, value in the matrix diagonal
 phi <- 5 # Spatial decay parameter, how fast covariance decay 
 #help(mkSpCov)
 Sigma <- mkSpCov(coords = as.matrix(X), K = as.matrix(sig2), 
@@ -40,7 +40,7 @@ Y <- rmvnorm(1, rep(0, 900), Sigma)
 # not affected by any other covariate
 r <- raster(nrows = 30, ncols = 30, xmn = 0, xmx = 3, ymn = 0, ymx = 3)
 r[cellFromXY(r,X)] <- Y
-plot(r)
+#plot(r)
 # To better understand the effect of sig2 and phi you can change those values and
 # plot also several r
 
