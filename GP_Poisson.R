@@ -16,14 +16,14 @@ library(nimble)
 set.seed(1)
 
 # Creating a 30x30 grid (study area)
-nx <- 30
-x <- seq(0, 3, length=nx)
+nx <- 50
+x <- seq(0, 50, length=nx)
 X <- expand.grid(x, x)
 
 # Setting sig2 and phi parameters. With this parameters we'll build the spatial 
 # covariance matrix Sigma, following an exponential model (others are allowed)
-sig2 <- 0.5 # This is the variance, value in the matrix diagonal
-phi <- 4 # Spatial decay parameter, how fast covariance decay 
+sig2 <- 1.5 # This is the variance, value in the matrix diagonal
+phi <- 0.05 # Spatial decay parameter, how fast covariance decay 
 #help(mkSpCov)
 Sigma <- mkSpCov(coords = as.matrix(X), K = as.matrix(sig2), 
                  Psi = as.matrix(0), theta = phi, cov.model = "exponential")
@@ -36,34 +36,36 @@ Sigma <- mkSpCov(coords = as.matrix(X), K = as.matrix(sig2),
 
 # Now we generate random numbers from a multivariate normal distribution with
 # mean = 0 and covariance matrix = Sigma
-Y <- rmvnorm(1, rep(0, 900), Sigma)
+Y <- rmvnorm(n=1, mean=rep(0, 2500), sigma=Sigma)
 
 # This would be the "latent" or purely spatial component of the species distribution,
 # not affected by any other covariate
-r <- raster(nrows = 30, ncols = 30, xmn = 0, xmx = 3, ymn = 0, ymx = 3)
+r <- raster(nrows = 50, ncols = 50, xmn = 0, xmx = 50, ymn = 0, ymx = 50)
 r[cellFromXY(r,X)] <- Y
 #plot(r)
 # To better understand the effect of sig2 and phi you can change those values and
 # plot also several r
 
 # Now we will create an environmental covariate that affects the distribution
-temper <- raster(nrows = 3, ncols = 3, xmn = 0, xmx = 3, ymn = 0, ymx = 3)
-temper[] <- rnorm(9)
-temper <- disaggregate(temper, 10, "bilinear")
+#temper <- raster(nrows = 3, ncols = 3, xmn = 0, xmx = 3, ymn = 0, ymx = 3)
+#temper[] <- rnorm(9)
+#temper <- disaggregate(temper, 10, "bilinear")
+temper <- raster(nrows = 50, ncols = 50, xmn = 0, xmx = 50, ymn = 0, ymx = 50)
+temper[] <- rnorm(2500)
 names(temper) <- "temper"
 
 # Finally, following the Jeff Dosser formulation we'll create the distribution
 # probability with a logit link: 
 # https://www.jeffdoser.com/files/spoccupancy-web/articles/modelfitting#spPGOcc
-lambda <- exp(r + (+0 +1.2*temper))
+lambda <- exp(1.5*r + (-1.5 +0.8*temper))
 
 # Now we can draw the actual distribution thought a random binomial number using 
 # this probability
 abu <- lambda
-abu[] <- rpois(900, lambda[])
+abu[] <- rpois(2500, lambda[])
 
 # Plot
-par(mfrow = c(2,2))
+par(mfrow = c(2,2), mai = c(0.5, 0.5, 0.5, 0.5), oma = c(1, 1, 1, 1))
 plot(r, main = "Pure spatial")
 plot(temper, main = "temper")
 plot(lambda, main = "Lambda")
@@ -74,7 +76,7 @@ plot(abu, main = "abundance")
 # Now we'll simulate a sampling process: we'll visit 200 places with a fixed
 # detection probability of 0.7
 n <- 500 # Number of visited places
-sampID <- sample(1:900, n) # Random selection of n places
+sampID <- sample(1:2500, n) # Random selection of n places
 locs <- xyFromCell(abu, sampID) # Getting coordinates of those places
 points(locs, pch = 16, cex = 0.5)
 z <- temper[sampID] # Getting environmental covariates of those places
@@ -115,8 +117,9 @@ cExpcov <- compileNimble(expcov)
 
 code <- nimbleCode({
   # Priors
-  #beta0 ~ dnorm(0, 5)
+  beta0 ~ dnorm(0, 5)
   beta1 ~ dnorm(0, 5)
+  g1 ~ dnorm(0, 5)
   mu0 ~ dnorm(0, 5) # We'll use a zero-mean spatial Gaussian Process (as spOccupancy)
   sigma ~ dunif(0, 10)
   phi ~ dunif(0, 10)
@@ -127,7 +130,7 @@ code <- nimbleCode({
   s[1:N] ~ dmnorm(mu[1:N], cov = cov[1:N, 1:N])
   # Likelihood
   # vectorized
-  log(lambda[1:N]) <- beta1 * z[1:N] + s[1:N]
+  log(lambda[1:N]) <- beta0 + beta1 * z[1:N] + g1 * s[1:N]
   #y[1:N] ~ dpois_vec(lambda[1:N])
    for(i in 1:N) {
      # It could be also vectorized but we should write the function
@@ -135,7 +138,7 @@ code <- nimbleCode({
    }
 })
 
-inits <- list(mu0 = 0, beta1 = 0, sigma = 1, phi = 1)
+inits <- list(mu0 = 0, beta1 = 0, sigma = 1, phi = 1, g1 = 0)
 
 set.seed(1)
 
@@ -148,7 +151,7 @@ model <- nimbleModel(code, constants = constants, data = data, inits = inits)
 cModel <- compileNimble(model)
 conf <- configureMCMC(model)
 conf$addMonitors('s')
-conf$removeSamplers('s[1:n]')
+#conf$removeSamplers('s[1:n]')
 # Changing a tunable parameter in the adaptation of RW_block makes a big difference.
 # adaptFactorExponent. Exponent controling the rate of decay of the scale 
 # adaptation factor. See Shaby and Wells, 2011, for details. (default = 0.8)
@@ -158,17 +161,17 @@ conf$removeSamplers('s[1:n]')
 MCMC <- buildMCMC(conf)
 cMCMC <- compileNimble(MCMC, project = cModel)
 
-samples <- runMCMC(cMCMC, niter = 500000, nburnin = 50000, thin = 10, nchains = 2)
+samples <- runMCMC(cMCMC, niter = 50000, nburnin = 10000, thin = 10, nchains = 1)
 #save(samples, file = "/home/javifl/iSDM/simus/samplesSp.RData")
 library(MCMCvis)
 MCMCsummary(samples, round = 2,
-            params = c("beta1", "sigma", "phi", "mu0"))
+            params = c("beta1", "sigma", "phi", "mu0", "g1"))
 MCMCtrace(samples,
           pdf = FALSE,
           ind = TRUE,
           Rhat = TRUE,
           n.eff = TRUE,
-          params = c("beta1", "sigma", "phi", "mu0")) 
+          params = c("beta1", "sigma", "phi", "mu0", "g1")) 
 
 samples2 <- rbind(samples$chain1,samples$chain2)
 
