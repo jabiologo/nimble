@@ -111,9 +111,7 @@ for (q in 2:50){
   df$estPhi[q] <- mean(mSpatial$theta.samples[,2])
   
 }
-
-quantile(df$estPhi)
-quantile(mSpatial$theta.samples)
+save(df, file = "/home/javifl/iSDM/simus/spOccupancy_simus.RData")
 
 
 
