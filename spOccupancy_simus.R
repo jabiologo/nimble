@@ -4,6 +4,22 @@ library(raster)
 library(spBayes)
 library(spOccupancy)
 
+# Random multivariate normal from Guelat & Kery 2018
+rmvn <- function(n, mu = 0, V = matrix(1)){
+  p <- length(mu)
+  if(any(is.na(match(dim(V), p))))   stop("Dimension problem!")
+  D <- chol(V)
+  t(matrix(rnorm(n * p), ncol = p) %*% D + rep(mu, rep(n, p)))
+}
+
+distance <- as.matrix(dist(X))
+rmnor <- rmvn(1, rep(0, n), 1.5 * exp(-0.05 * distance))
+r[] <- rmnor
+plot(r)
+Y <- rmvnorm(n=1, mean=rep(0, 2500), sigma=Sigma)
+r[] <- Y
+plot(r)
+
 df <- data.frame(simSig2 = rep(1.5, 50),
                  simPhi = rep(0.5, 50),
                  simB0 = rep(-1.2, 50),
@@ -14,6 +30,8 @@ df <- data.frame(simSig2 = rep(1.5, 50),
                  estB0 = rep(NA, 50),
                  estB1 = rep(NA, 50),
                  estP = rep(NA, 50))
+
+
 
 for (q in 2:50){
   
