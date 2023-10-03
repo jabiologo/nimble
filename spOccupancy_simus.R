@@ -2,7 +2,7 @@ library(plgp)
 library(mvtnorm)
 library(raster)
 library(spBayes)
-library(spOccupancy)
+
 
 # Random multivariate normal from Guelat & Kery 2018
 rmvn <- function(n, mu = 0, V = matrix(1)){
@@ -33,22 +33,18 @@ df <- data.frame(simSig2 = rep(1.5, 50),
 
 
 
-for (q in 2:50){
+for (q in 1:50){
   
   print(q)
   
   nx <- 50
   x <- seq(0, 50, length=nx)
   X <- expand.grid(x, x)
-  
+  distance <- as.matrix(dist(X))
   sig2 <- 1.5 
   phi <- 0.05 
-  
-  Sigma <- mkSpCov(coords = as.matrix(X), K = as.matrix(sig2), 
-                   Psi = as.matrix(0), theta = phi, cov.model = "exponential")
-  
-  Y <- rmvnorm(n=1, mean=rep(0, 2500), sigma=Sigma)
-  
+
+  Y <- as.vector(rmvn(1, rep(0, 2500), sig2 * exp(-phi * distance)))
   r <- raster(nrows = 50, ncols = 50, xmn = 0, xmx = 50, ymn = 0, ymx = 50)
   r[cellFromXY(r,X)] <- Y
   
@@ -56,7 +52,7 @@ for (q in 2:50){
   temper[] <- rnorm(2500)
   names(temper) <- "temper"
   
-  psi <- exp(r + (-1.2+2*temper))/(1+exp(r + (-1.2+2*temper)))
+  psi <- exp(r + (-1.8+0.6*temper))/(1+exp(r + (-1.8+0.6*temper)))
   
   # Now we can draw the actual distribution thought a random binomial number using 
   # this probability
@@ -75,9 +71,9 @@ for (q in 2:50){
   coords <- xyFromCell(distr, sampID) 
   occ.covs <- matrix(temper[sampID])
   colnames(occ.covs) <- "temper"
-  y <- matrix(NA, n, 4)
+  y <- matrix(NA, n, 3)
   
-  for (j in 1:4){
+  for (j in 1:3){
     for (i in 1:length(sampID)){
       y[i,j] <- rbinom(1, extract(distr,sampID[i]), 0.7)
     }
@@ -134,7 +130,28 @@ save(df, file = "/home/javifl/iSDM/simus/spOccupancy_simus.RData")
 
 
 
+library(stars)
+pred.0 <- cbind(1, temper[]) 
+colnames(pred.0)[2] <- "temper"
+coords.0 <- as.matrix(xyFromCell(distr, 1:2500))
+# Approx. run time: X min
+out.sp.pred <- predict(mSpatial, pred.0, coords.0, n.omp.threads = 4, 
+                       verbose = TRUE, n.report=100)
+# Produce a species distribution map (posterior predictive means of occupancy)
+plot.dat <- data.frame(x = coords.0[,1], 
+                       y = coords.0[,2], 
+                       mean.psi = apply(out.sp.pred$psi.0.samples, 2, mean), 
+                       sd.psi = apply(out.sp.pred$psi.0.samples, 2, sd))
 
+mPred <- distr
+mPred[] <- plot.dat$mean.psi
+
+par(mfrow = c(2,2))
+plot(r, main = "Pure spatial effect, rho")
+plot(temper, main = "Temperature")
+plot(psi, main = "True Psi")
+#points(xyFromCell(Y,sampID), pch = 16, cex = .6)
+plot(mPred, main = "Prediction with\n spatial component")
 
 
 
