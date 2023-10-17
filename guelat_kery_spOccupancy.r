@@ -33,6 +33,7 @@ n <- nrow(simgrid)
 distance <- as.matrix(dist(simgrid))
 # Covariate
 covx <- replicate(niter, rnorm(n), simplify = FALSE)
+#covx <- replicate(niter, as.vector(rmvn(1, rep(0, n), 1.5 * exp(-0.05 * distance))), simplify = FALSE)
 # Sampled sites
 sites <- replicate(niter, sort(sample(1:n, size = sampleSizes[1])), simplify = FALSE)
 # Patchy random fields
@@ -63,8 +64,9 @@ plot(covxR, main = "Temperature")
 plot(psiR, main = "True Psi")
 plot(presenceR, main = "True presence")
 
-
-# spOccupancy
+###############
+# spOccupancy #
+###############
 
 coords <- simgrid[sites[[1]][],]
 occ.covs <- matrix(covx[[1]][sites[[1]][]])
@@ -144,9 +146,9 @@ library(nimble)
 library(MCMCvis)
 
 dists <- as.matrix(dist(coords))
-#dists <- dists / max(dists)  # normalize to max distance of 1
+dists <- dists / max(dists)  # normalize to max distance of 1
 
-min.dists <- 3/0.1 # If we put 0, we get Inf
+min.dists <- 3/unique(dists[order(dists)])[2] # min(dist) after 0
 max.dists <- 3/max(dists)
 
 constants <- list(N = nrow(y),
@@ -158,11 +160,11 @@ data <- list(y = y,
              z = as.numeric(occ.covs))
 
 expcov <- nimbleFunction(     
-  run = function(dists = double(2), phi = double(0), sigma = double(0)) {
+  run = function(dists = double(2), phi = double(0), sigma2 = double(0)) {
     returnType(double(2))
     n <- dim(dists)[1]
     result <- matrix(nrow = n, ncol = n, init = FALSE)
-    sigma2 <- sigma*sigma
+    #sigma2 <- sigma*sigma
     for(i in 1:n)
       for(j in 1:n)
         result[i, j] <- sigma2*exp(-dists[i,j]*phi)
@@ -175,13 +177,13 @@ code <- nimbleCode({
   alpha ~ dnorm(mean = 0, sd = 2.72)
   beta ~ dnorm(mean = 0, sd = 2.72)
   #mu0 ~ dnorm(mean = 0, sd = 0.5) # We'll use a zero-mean spatial Gaussian Process (as spOccupancy)
-  sigma ~ dinvgamma(shape = 2, scale = 2)
-  phi ~ dunif(0, 30)
+  sigma2 ~ dinvgamma(shape = 2, scale = 2) #################################
+  phi ~ dunif(3, 203) # (max.dists, min.dists)
   p ~ dbeta(1,1)
   
   # Latent spatial process
   mu[1:N] <- 0*ones[1:N]
-  cov[1:N, 1:N] <- expcov(dists[1:N, 1:N], phi, sigma)
+  cov[1:N, 1:N] <- expcov(dists[1:N, 1:N], phi, sigma2)
   s[1:N] ~ dmnorm(mu[1:N], cov = cov[1:N, 1:N])
   # Likelihood
   for (i in 1:N) {
@@ -205,7 +207,7 @@ code <- nimbleCode({
   
 })
 
-inits <- list(alpha = 0, beta = 0, sigma = 2, phi = 3/mean(dists), 
+inits <- list(alpha = 0, beta = 0, sigma2 = 1, phi = 3/mean(dists), 
               p = 0.5, Y = apply(y, 1, max, na.rm = TRUE))
 
 ## setup initial spatially-correlated latent process values
@@ -216,29 +218,38 @@ inits$s <- inits$s[ , 1]  # so can give nimble a vector rather than one-column m
 model <- nimbleModel(code, constants = constants, data = data, inits = inits)
 cModel <- compileNimble(model)
 conf <- configureMCMC(model)
-conf$addMonitors('s')
-#conf$removeSamplers('s[1:n]')
+#conf$addMonitors('s')
+conf$removeSamplers('s[1:500]')
 # Changing a tunable parameter in the adaptation of RW_block makes a big difference.
 # adaptFactorExponent. Exponent controling the rate of decay of the scale 
 # adaptation factor. See Shaby and Wells, 2011, for details. (default = 0.8)
 # IT'S TOO SLOW. ALSO PROBLEMS STORING s()
-# conf$addSampler('s[1:n]', 'RW_block', control = list(adaptFactorExponent = 0.25))
+
+# PROBLEMS STORING s[] CHECK KEEPERS
+# IMPORTANT!!!! WE SHOULD BACK-TRNSFORM (phi and sigma are for standarized distance)
+conf$addSampler('s[1:500]', 'RW_block', control = list(adaptFactorExponent = 0.25))
+## Changing a tunable parameter in the adaptation of RW_block makes a big difference.
+# [Note] Assigning an RW_block sampler to nodes with very different scales can 
+# result in low MCMC efficiency.  If all nodes assigned to RW_block are not on 
+# a similar scale, we recommend providing an informed value for the "propCov" 
+# control list argument, or using the AFSS sampler instead.
+
 
 MCMC <- buildMCMC(conf)
 cMCMC <- compileNimble(MCMC, project = cModel)
 
 samples <- runMCMC(cMCMC, niter = 50000, nburnin = 10000, thin = 10, nchains = 2)
-save(samples, file = "samples_guelat_kery_nimble.RData")
+#save(samples, file = "samples_guelat_kery_nimble.RData")
 load("samples_guelat_kery_nimble.RData")
 
 MCMCsummary(samples, round = 2,
-            params = c("alpha", "beta", "sigma", "phi", "p"))
+            params = c("alpha", "beta", "sigma2", "phi", "p"))
 MCMCtrace(samples,
           pdf = FALSE,
           ind = TRUE,
           Rhat = TRUE,
           n.eff = TRUE,
-          params = c("alpha", "beta", "sigma", "phi", "p")) 
+          params = c("alpha", "beta", "sigma2", "phi", "p")) 
 
 ###############################
 # Predicting in new locations #
